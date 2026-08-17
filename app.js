@@ -3,9 +3,10 @@ const PASSWORD_HASH_KEYS = {
   recorder: "lulu-fangfang-password-recorder",
   reviewer: "lulu-fangfang-password-reviewer",
 };
-const DATA_VERSION = 3;
+const DATA_VERSION = 4;
 const SESSION_TIMEOUT_MS = 30 * 60 * 1000;
 const CLOUD_CONFIG = window.LULU_FANGFANG_CLOUD_CONFIG || null;
+const RECORD_STATUSES = ["未办", "进行中", "已办"];
 const DEFAULT_PASSWORD_HASHES = {
   recorder: { sha256: "9a0dd7ba868524e126086edda337dac92c8b4363a115edc709e8b3523a95a696", fallback: "5d45f3cfd18d6d87198fb2e795e11db1" },
   reviewer: { sha256: "d1228b0c90170b196f6955986a61382313cf9f1f4c6cd919177eea6e772ea9bc", fallback: "06607d4fd0331b79024198e717d3c5af" },
@@ -16,7 +17,7 @@ const defaultData = {
   settings: {
     threshold: 3,
     periodStart: "2026-08-01",
-    agreement: "先修复，再兑换。双方都舒服的时候，心愿才算真正兑现。",
+    agreement: "把想做的事认真写下，把答应彼此的事慢慢完成。一起记录，也一起把生活过好。",
   },
   records: [],
   wishes: [
@@ -47,6 +48,7 @@ let cloudSchemaReady = false;
 let cloudContext = null;
 let cloudChannel = null;
 let cloudSaveChain = Promise.resolve();
+let cloudRetrySnapshot = null;
 let cloudSyncState = "checking";
 let cloudSyncDetail = "正在连接 Supabase";
 let pendingLocalMigration = null;
@@ -78,15 +80,34 @@ function normalizeData(saved) {
       completedAt: wish.completedAt || "",
       status: wish.status === "已完成" ? "已完成" : "待完成",
     }));
+  const records = Array.isArray(saved.records) ? saved.records.map((record, index) => {
+    const legacyStatus = record.confirmation === "已确认"
+      ? "已办"
+      : record.confirmation === "需要再沟通" ? "进行中" : "未办";
+    const status = RECORD_STATUSES.includes(record.status) ? record.status : legacyStatus;
+    return {
+      ...record,
+      id: record.id || `migrated-record-${index}`,
+      date: record.date || today(),
+      title: record.title || record.situation || "未命名事项",
+      category: record.category || record.tone || "共同约定",
+      details: record.details || record.repair || "",
+      notes: record.notes || "",
+      status,
+      completedAt: status === "已办" ? (record.completedAt || record.date || "") : "",
+      createdBy: record.createdBy === "reviewer" ? "reviewer" : "recorder",
+      createdAt: record.createdAt || `${record.date || "1970-01-01"}T00:00:00.000Z`,
+    };
+  }) : [];
   return {
     version: DATA_VERSION,
     settings: { ...defaultData.settings, ...(saved.settings || {}) },
-    records: Array.isArray(saved.records) ? saved.records.map((record) => ({ confirmation: "待确认", notes: "", ...record })) : [],
+    records,
     wishes,
     redemptions: migratedRedemptions,
-    moments: Array.isArray(saved.moments) ? saved.moments.map((moment) => ({ imageIds: [], reviewStatus: "待复核", reviewedAt: "", ...moment })) : [],
-    tasks: Array.isArray(saved.tasks) ? saved.tasks.map((task) => ({ ...task, done: Boolean(task.done), reviewed: Boolean(task.reviewed), reviewedAt: task.reviewedAt || "", createdAt: task.createdAt || `${task.date || "1970-01-01"}T00:00:00.000Z` })) : [],
-    issues: Array.isArray(saved.issues) ? saved.issues.map((issue) => ({ status: "待沟通", reviewedAt: "", proposal: "", ...issue })) : [],
+    moments: Array.isArray(saved.moments) ? saved.moments.map((moment) => ({ imageIds: [], reviewStatus: "待复核", reviewedAt: "", createdBy: "recorder", ...moment })) : [],
+    tasks: Array.isArray(saved.tasks) ? saved.tasks.map((task) => ({ createdBy: "recorder", ...task, done: Boolean(task.done), reviewed: Boolean(task.reviewed), reviewedAt: task.reviewedAt || "", createdAt: task.createdAt || `${task.date || "1970-01-01"}T00:00:00.000Z` })) : [],
+    issues: Array.isArray(saved.issues) ? saved.issues.map((issue) => ({ status: "待沟通", reviewedAt: "", proposal: "", createdBy: "recorder", ...issue })) : [],
   };
 }
 
@@ -222,6 +243,7 @@ function friendlyCloudError(error) {
   if (/invalid login credentials/i.test(message)) return "云端密码不正确，请重试。";
   if (/email not confirmed/i.test(message)) return "该身份尚未在 Supabase 中确认。";
   if (/membership_required|no rows|not a member/i.test(message)) return "账号已登录，但尚未加入这个小家。请先执行 Supabase 初始化 SQL。";
+  if (/reviewer_permission_required/i.test(message)) return "这项云端操作仅允许路路小皇帝完成。";
   if (/failed to fetch|network|load failed/i.test(message)) return "暂时无法连接 Supabase，请检查网络后重试。";
   return `云端操作失败：${message || "未知错误"}`;
 }
@@ -369,8 +391,12 @@ let cloudSyncGeneration = 0;
 
 function queueCloudSave(snapshot) {
   const generation = cloudSyncGeneration;
+  cloudRetrySnapshot = snapshot;
   cloudSaveChain = cloudSaveChain
-    .then(() => saveCloudSnapshot(snapshot, generation))
+    .then(async () => {
+      await saveCloudSnapshot(snapshot, generation);
+      if (cloudRetrySnapshot === snapshot) cloudRetrySnapshot = null;
+    })
     .catch((error) => {
       setCloudSyncState("error", friendlyCloudError(error));
       toast("云端同步失败，本机缓存仍然保留");
@@ -397,6 +423,8 @@ function subscribeToCloudState() {
     })
     .subscribe((status) => {
       if (status === "SUBSCRIBED" && !pendingLocalMigration) setCloudSyncState("synced", `实时同步已连接 · 版本 ${cloudContext.revision}`);
+      if (["CHANNEL_ERROR", "TIMED_OUT"].includes(status)) setCloudSyncState("error", "实时连接暂时中断，可点击立即同步重试");
+      if (status === "CLOSED" && cloudContext) setCloudSyncState("error", "实时连接已关闭，可点击立即同步重试");
     });
 }
 
@@ -463,12 +491,40 @@ async function migrateLocalDataToCloud() {
   }
 }
 
+async function syncCloudNow() {
+  if (!requireAdmin("同步云端数据")) return;
+  if (!cloudContext) {
+    toast("请先退出当前本机身份，再使用 Supabase 身份重新登录");
+    return;
+  }
+  if (pendingLocalMigration) {
+    toast("云端仍为空，请先迁移当前浏览器的数据");
+    return;
+  }
+  setCloudSyncState("syncing", "正在核对云端最新版本");
+  try {
+    await cloudSaveChain;
+    if (cloudRetrySnapshot) {
+      const retrySnapshot = clone(data);
+      await saveCloudSnapshot(retrySnapshot, cloudSyncGeneration);
+      cloudRetrySnapshot = null;
+    }
+    await reloadCloudState();
+    subscribeToCloudState();
+    toast("云端数据已核对到最新版本");
+  } catch (error) {
+    setCloudSyncState("error", friendlyCloudError(error));
+    toast("手动同步失败，本机缓存仍然保留");
+  }
+}
+
 function releaseCloudSession() {
   cloudSyncGeneration += 1;
   if (cloudChannel && cloudClient) cloudClient.removeChannel(cloudChannel);
   cloudChannel = null;
   cloudContext = null;
   pendingLocalMigration = null;
+  cloudRetrySnapshot = null;
   if (cloudClient) cloudClient.auth.signOut({ scope: "local" }).catch(() => {});
   if (cloudSchemaReady) {
     cloudSyncState = "ready";
@@ -482,6 +538,15 @@ function touchAdminSession() {
 
 const isRecorder = () => currentRole === "recorder";
 const isReviewer = () => currentRole === "reviewer";
+const isContributor = () => isAdmin && (isRecorder() || isReviewer());
+
+function creatorName(entry) {
+  return entry?.createdBy === "reviewer" ? "路路小皇帝" : "方方";
+}
+
+function canManageEntry(entry) {
+  return isReviewer() || (isRecorder() && entry?.createdBy !== "reviewer");
+}
 
 function escapeHtml(value = "") {
   return String(value).replace(/[&<>'"]/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" }[char]));
@@ -501,20 +566,22 @@ function isInCycle(record) {
 
 function metrics() {
   const cycleRecords = data.records.filter(isInCycle);
+  const completedCycleRecords = cycleRecords.filter((record) => record.status === "已办");
   const cycleRedemptions = data.redemptions.filter((item) => item.redeemedAt >= data.settings.periodStart && item.redeemedAt <= today());
   const threshold = Math.max(1, Number(data.settings.threshold) || 1);
-  const remainder = cycleRecords.length % threshold;
-  const earned = Math.floor(cycleRecords.length / threshold);
+  const remainder = completedCycleRecords.length % threshold;
+  const earned = Math.floor(completedCycleRecords.length / threshold);
   const used = cycleRedemptions.length;
   const available = Math.max(0, earned - used);
   return {
     cycleRecords,
+    completedCycleRecords,
     cycleRedemptions,
     threshold,
     earned,
     used,
     available,
-    pending: cycleRecords.filter((record) => record.confirmation !== "已确认").length,
+    pending: data.records.filter((record) => record.status !== "已办").length,
     completed: data.redemptions.filter((item) => item.status === "已完成").length,
     registeredWishes: data.redemptions.length,
     remainder,
@@ -524,25 +591,26 @@ function metrics() {
 }
 
 function statusClass(status) {
-  if (["已确认", "已完成", "已复核", "已解决"].includes(status)) return "confirmed";
+  if (["已确认", "已完成", "已复核", "已解决", "已办"].includes(status)) return "confirmed";
+  if (["进行中", "沟通中", "待复核"].includes(status)) return "progress";
   if (["需要再沟通", "调整", "待沟通"].includes(status)) return "needs";
   return "";
 }
 
 function renderStats() {
   const m = metrics();
-  $("#statRecords").textContent = m.cycleRecords.length;
+  $("#statRecords").textContent = m.completedCycleRecords.length;
   $("#statAvailable").textContent = m.available;
   $("#statPending").textContent = m.pending;
   $("#statCompleted").textContent = m.completed;
   $("#statPeriod").textContent = `从 ${formatDate(data.settings.periodStart)} 开始`;
-  $("#statThreshold").textContent = `每 ${m.threshold} 次记录兑换 1 份`;
+  $("#statThreshold").textContent = `每 ${m.threshold} 项已办兑换 1 份`;
   $("#progressKicker").textContent = m.available > 0 ? `${m.available} 份可用` : `${m.remainder} / ${m.threshold}`;
-  $("#progressHeadline").textContent = m.available > 0 ? "可以选择一份心愿" : `还差 ${m.distance} 次记录`;
-  $("#progressSubline").textContent = m.available > 0 ? "去心愿清单看看，她想要哪一项。" : "完成一次修复，就离心愿更近一点。";
+  $("#progressHeadline").textContent = m.available > 0 ? "可以选择一份心愿" : `还差 ${m.distance} 项已办`;
+  $("#progressSubline").textContent = m.available > 0 ? "去心愿清单看看，这次想实现哪一项。" : "把一件约定认真做完，就离心愿更近一点。";
   $("#progressBar").style.width = `${m.progress}%`;
   $("#progressStart").textContent = `本周期起点 ${formatDate(data.settings.periodStart)}`;
-  $("#progressHint").textContent = m.available > 0 ? "本轮已达成" : "继续把话说好";
+  $("#progressHint").textContent = m.available > 0 ? "本轮已达成" : "继续完成共同事项";
   $("#earnedCount").textContent = m.earned;
   $("#usedCount").textContent = m.used;
   $("#balanceCount").textContent = m.available;
@@ -560,13 +628,13 @@ function renderWeekTrend() {
     date.setHours(0, 0, 0, 0);
     date.setDate(date.getDate() - offset);
     const key = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
-    days.push({ key, label: ["日", "一", "二", "三", "四", "五", "六"][date.getDay()], count: data.records.filter((record) => record.date === key).length });
+    days.push({ key, label: ["日", "一", "二", "三", "四", "五", "六"][date.getDay()], count: data.records.filter((record) => record.status === "已办" && (record.completedAt || record.date) === key).length });
   }
   const max = Math.max(1, ...days.map((day) => day.count));
-  $("#weekRecordCount").textContent = `${days.reduce((sum, day) => sum + day.count, 0)} 次`;
+  $("#weekRecordCount").textContent = `${days.reduce((sum, day) => sum + day.count, 0)} 项`;
   $("#weekTrend").innerHTML = days.map((day) => {
     const height = day.count ? Math.max(14, Math.round((day.count / max) * 48)) : 3;
-    return `<div class="trend-day ${day.count ? "has-records" : ""}" title="${formatDate(day.key)}：${day.count} 次"><div class="trend-bar-track"><span class="trend-bar" style="height:${height}px"></span></div><span>${day.label}</span></div>`;
+    return `<div class="trend-day ${day.count ? "has-records" : ""}" title="${formatDate(day.key)}：已办 ${day.count} 项"><div class="trend-bar-track"><span class="trend-bar" style="height:${height}px"></span></div><span>${day.label}</span></div>`;
   }).join("");
 }
 
@@ -574,23 +642,23 @@ function renderRecentRecords() {
   const target = $("#recentRecords");
   const recent = [...data.records].sort((a, b) => b.date.localeCompare(a.date)).slice(0, 4);
   if (!recent.length) {
-    target.innerHTML = `<div class="empty-state"><i data-lucide="notebook-pen"></i><strong>还没有复盘记录</strong><span>方方登录后，可以从这里开始记录。</span></div>`;
+    target.innerHTML = `<div class="empty-state"><i data-lucide="notebook-pen"></i><strong>还没有行为事项</strong><span>方方和路路登录后，都可以把约定或待办记在这里。</span></div>`;
     return;
   }
-  target.innerHTML = recent.map((record) => `<div class="activity-item"><div class="activity-date">${formatDate(record.date, true).replace("/", "<br />")}</div><div><strong>${escapeHtml(record.situation)}</strong><small>${escapeHtml(record.repair)}</small></div><span class="status-label ${statusClass(record.confirmation)}">${escapeHtml(record.confirmation)}</span></div>`).join("");
+  target.innerHTML = recent.map((record) => `<div class="activity-item"><div class="activity-date">${formatDate(record.date, true).replace("/", "<br />")}</div><div><strong>${escapeHtml(record.title)}</strong><small>${escapeHtml(record.details || record.notes || `${creatorName(record)}记录`)}</small></div><span class="status-label ${statusClass(record.status)}">${escapeHtml(record.status)}</span></div>`).join("");
 }
 
 function renderMoments() {
   const target = $("#momentsGrid");
   const sorted = [...data.moments].sort((a, b) => `${b.date}-${b.id}`.localeCompare(`${a.date}-${a.id}`));
   if (!sorted.length) {
-    target.innerHTML = `<div class="empty-state module-empty"><i data-lucide="images"></i><strong>还没有美好记录</strong><span>方方登录后，可以写下第一件值得记住的小事。</span></div>`;
+    target.innerHTML = `<div class="empty-state module-empty"><i data-lucide="images"></i><strong>还没有美好记录</strong><span>方方和路路都可以写下第一件值得记住的小事。</span></div>`;
     return;
   }
   target.innerHTML = sorted.map((moment) => {
     const images = (moment.imageIds || []).map((id) => imageCache.get(id)).filter(Boolean);
     const imageMarkup = images.length ? `<div class="moment-photo-grid count-${Math.min(images.length, 4)}">${images.map((image) => `<img src="${image.dataUrl}" alt="${escapeHtml(moment.title)}的照片" loading="lazy" />`).join("")}</div>` : `<div class="moment-no-photo"><i data-lucide="sun-medium"></i><span>${formatDate(moment.date, true)}</span></div>`;
-    return `<article class="moment-card">${imageMarkup}<div class="moment-content"><div class="moment-meta"><span>${formatDate(moment.date)}</span><span class="status-label ${statusClass(moment.reviewStatus)}">${escapeHtml(moment.reviewStatus || "待复核")}</span></div><h3>${escapeHtml(moment.title)}</h3>${moment.note ? `<p>${escapeHtml(moment.note)}</p>` : ""}<div class="moment-actions">${isReviewer() && moment.reviewStatus !== "已复核" ? `<button class="button button-outline" data-action="review-moment" data-id="${moment.id}" type="button"><i data-lucide="badge-check"></i>确认复核</button>` : ""}${isRecorder() ? `<div class="row-actions"><button class="icon-button" data-action="edit-moment" data-id="${moment.id}" title="编辑美好记录"><i data-lucide="pencil"></i></button><button class="icon-button danger" data-action="delete-moment" data-id="${moment.id}" title="删除美好记录"><i data-lucide="trash-2"></i></button></div>` : ""}</div></div></article>`;
+    return `<article class="moment-card">${imageMarkup}<div class="moment-content"><div class="moment-meta"><span>${formatDate(moment.date)} · ${creatorName(moment)}记录</span><span class="status-label ${statusClass(moment.reviewStatus)}">${escapeHtml(moment.reviewStatus || "待复核")}</span></div><h3>${escapeHtml(moment.title)}</h3>${moment.note ? `<p>${escapeHtml(moment.note)}</p>` : ""}<div class="moment-actions">${isReviewer() && moment.reviewStatus !== "已复核" ? `<button class="button button-outline" data-action="review-moment" data-id="${moment.id}" type="button"><i data-lucide="badge-check"></i>确认复核</button>` : ""}${canManageEntry(moment) ? `<div class="row-actions"><button class="icon-button" data-action="edit-moment" data-id="${moment.id}" title="编辑美好记录"><i data-lucide="pencil"></i></button><button class="icon-button danger" data-action="delete-moment" data-id="${moment.id}" title="删除美好记录"><i data-lucide="trash-2"></i></button></div>` : ""}</div></div></article>`;
   }).join("");
 }
 
@@ -603,10 +671,10 @@ function renderTasks() {
   $("#taskProgressBar").style.width = `${tasks.length ? (completed / tasks.length) * 100 : 0}%`;
   const target = $("#taskList");
   if (!tasks.length) {
-    target.innerHTML = `<div class="empty-state compact-empty"><i data-lucide="list-todo"></i><strong>清单还是空的</strong><span>方方可以添加当天要做的事情。</span></div>`;
+    target.innerHTML = `<div class="empty-state compact-empty"><i data-lucide="list-todo"></i><strong>清单还是空的</strong><span>方方和路路都可以添加当天要做的事情。</span></div>`;
     return;
   }
-  target.innerHTML = tasks.map((task) => `<div class="task-row ${task.done ? "is-done" : ""} ${task.reviewed ? "is-reviewed" : ""}"><button class="task-check" data-action="toggle-task" data-id="${task.id}" type="button" ${!isRecorder() ? "disabled" : ""} aria-label="${task.done ? "标记为未完成" : "标记为已完成"}"><i data-lucide="${task.done ? "check" : "circle"}"></i></button><div class="task-main"><strong>${escapeHtml(task.title)}</strong><small>${task.reviewed ? `路路小皇帝已复核 · ${formatDate(task.reviewedAt)}` : task.done ? "等待路路小皇帝复核" : "等待方方完成"}</small></div><span class="status-label ${task.reviewed ? "confirmed" : ""}">${task.reviewed ? "已复核" : task.done ? "待复核" : "待完成"}</span><div class="task-actions">${isReviewer() && task.done && !task.reviewed ? `<button class="button button-outline" data-action="review-task" data-id="${task.id}" type="button"><i data-lucide="badge-check"></i>复核</button>` : ""}${isRecorder() ? `<button class="icon-button danger" data-action="delete-task" data-id="${task.id}" title="删除任务"><i data-lucide="trash-2"></i></button>` : ""}</div></div>`).join("");
+  target.innerHTML = tasks.map((task) => `<div class="task-row ${task.done ? "is-done" : ""} ${task.reviewed ? "is-reviewed" : ""}"><button class="task-check" data-action="toggle-task" data-id="${task.id}" type="button" ${!canManageEntry(task) ? "disabled" : ""} aria-label="${task.done ? "标记为未完成" : "标记为已完成"}"><i data-lucide="${task.done ? "check" : "circle"}"></i></button><div class="task-main"><strong>${escapeHtml(task.title)}</strong><small>${creatorName(task)}记录 · ${task.reviewed ? `路路已复核 ${formatDate(task.reviewedAt)}` : task.done ? "等待路路复核" : "待完成"}</small></div><span class="status-label ${task.reviewed ? "confirmed" : task.done ? "progress" : ""}">${task.reviewed ? "已复核" : task.done ? "待复核" : "待完成"}</span><div class="task-actions">${isReviewer() && task.done && !task.reviewed ? `<button class="button button-outline" data-action="review-task" data-id="${task.id}" type="button"><i data-lucide="badge-check"></i>复核</button>` : ""}${canManageEntry(task) ? `<button class="icon-button danger" data-action="delete-task" data-id="${task.id}" title="删除任务"><i data-lucide="trash-2"></i></button>` : ""}</div></div>`).join("");
 }
 
 function renderIssues() {
@@ -618,7 +686,7 @@ function renderIssues() {
     target.innerHTML = `<div class="empty-state module-empty"><i data-lucide="messages-square"></i><strong>目前没有问题记录</strong><span>有需要沟通的事情时，先把事实和期望写清楚。</span></div>`;
     return;
   }
-  target.innerHTML = sorted.map((issue) => `<article class="issue-card ${issue.status === "已解决" ? "is-solved" : ""}"><div class="issue-card-head"><div><span>${formatDate(issue.date)}</span><h3>${escapeHtml(issue.title)}</h3></div><span class="status-label ${statusClass(issue.status)}">${escapeHtml(issue.status)}</span></div><div class="issue-block"><small>问题与感受</small><p>${escapeHtml(issue.description)}</p></div>${issue.proposal ? `<div class="issue-block proposal"><small>建议的下一步</small><p>${escapeHtml(issue.proposal)}</p></div>` : ""}<div class="issue-actions">${isReviewer() && issue.status === "待沟通" ? `<button class="button button-outline" data-action="update-issue" data-status="沟通中" data-id="${issue.id}"><i data-lucide="messages-square"></i>开始沟通</button>` : ""}${isReviewer() && issue.status !== "已解决" ? `<button class="button button-primary" data-action="update-issue" data-status="已解决" data-id="${issue.id}"><i data-lucide="badge-check"></i>确认解决</button>` : ""}${isRecorder() ? `<div class="row-actions"><button class="icon-button" data-action="edit-issue" data-id="${issue.id}" title="编辑问题"><i data-lucide="pencil"></i></button><button class="icon-button danger" data-action="delete-issue" data-id="${issue.id}" title="删除问题"><i data-lucide="trash-2"></i></button></div>` : ""}</div></article>`).join("");
+  target.innerHTML = sorted.map((issue) => `<article class="issue-card ${issue.status === "已解决" ? "is-solved" : ""}"><div class="issue-card-head"><div><span>${formatDate(issue.date)} · ${creatorName(issue)}记录</span><h3>${escapeHtml(issue.title)}</h3></div><span class="status-label ${statusClass(issue.status)}">${escapeHtml(issue.status)}</span></div><div class="issue-block"><small>问题与感受</small><p>${escapeHtml(issue.description)}</p></div>${issue.proposal ? `<div class="issue-block proposal"><small>建议的下一步</small><p>${escapeHtml(issue.proposal)}</p></div>` : ""}<div class="issue-actions">${isReviewer() && issue.status === "待沟通" ? `<button class="button button-outline" data-action="update-issue" data-status="沟通中" data-id="${issue.id}"><i data-lucide="messages-square"></i>开始沟通</button>` : ""}${isReviewer() && issue.status !== "已解决" ? `<button class="button button-primary" data-action="update-issue" data-status="已解决" data-id="${issue.id}"><i data-lucide="badge-check"></i>确认解决</button>` : ""}${canManageEntry(issue) ? `<div class="row-actions"><button class="icon-button" data-action="edit-issue" data-id="${issue.id}" title="编辑问题"><i data-lucide="pencil"></i></button><button class="icon-button danger" data-action="delete-issue" data-id="${issue.id}" title="删除问题"><i data-lucide="trash-2"></i></button></div>` : ""}</div></article>`).join("");
 }
 
 function renderWishPreview() {
@@ -630,8 +698,7 @@ function renderWishPreview() {
 }
 
 function recordActions(record) {
-  if (isRecorder()) return `<div class="row-actions"><button class="icon-button" data-action="edit-record" data-id="${record.id}" title="编辑行为日志"><i data-lucide="pencil"></i></button><button class="icon-button danger" data-action="delete-record" data-id="${record.id}" title="删除行为日志"><i data-lucide="trash-2"></i></button></div>`;
-  if (isReviewer()) return `<div class="row-actions review-actions"><button class="icon-button" data-action="confirm-record" data-status="已确认" data-id="${record.id}" title="确认复核"><i data-lucide="badge-check"></i></button><button class="icon-button danger" data-action="confirm-record" data-status="需要再沟通" data-id="${record.id}" title="需要再沟通"><i data-lucide="message-circle-warning"></i></button></div>`;
+  if (canManageEntry(record)) return `<div class="row-actions"><button class="icon-button" data-action="edit-record" data-id="${record.id}" title="编辑事项"><i data-lucide="pencil"></i></button><button class="icon-button danger" data-action="delete-record" data-id="${record.id}" title="删除事项"><i data-lucide="trash-2"></i></button></div>`;
   return `<span class="status-label">只读</span>`;
 }
 
@@ -640,17 +707,17 @@ function renderRecords() {
   const query = recordFilters.query.toLowerCase();
   const filtered = [...data.records]
     .filter((record) => !recordFilters.cycleOnly || isInCycle(record))
-    .filter((record) => recordFilters.status === "all" || record.confirmation === recordFilters.status)
-    .filter((record) => !query || [record.situation, record.tone, record.repair, record.notes, record.confirmation].some((value) => String(value || "").toLowerCase().includes(query)))
+    .filter((record) => recordFilters.status === "all" || record.status === recordFilters.status)
+    .filter((record) => !query || [record.title, record.category, record.details, record.notes, record.status, creatorName(record)].some((value) => String(value || "").toLowerCase().includes(query)))
     .sort((a, b) => b.date.localeCompare(a.date));
   $("#recordResultCount").textContent = filtered.length;
   if (!filtered.length) {
     const hasFilters = recordFilters.query || recordFilters.status !== "all" || recordFilters.cycleOnly;
-    target.innerHTML = `<div class="empty-state"><i data-lucide="${hasFilters ? "search-x" : "notebook-pen"}"></i><strong>${hasFilters ? "没有符合条件的记录" : "还没有记录"}</strong><span>${hasFilters ? "调整搜索词或筛选条件后再试。" : "管理员解锁后，可以新增第一次沟通复盘。"}</span></div>`;
+    target.innerHTML = `<div class="empty-state"><i data-lucide="${hasFilters ? "search-x" : "notebook-pen"}"></i><strong>${hasFilters ? "没有符合条件的事项" : "还没有行为事项"}</strong><span>${hasFilters ? "调整搜索词或筛选条件后再试。" : "任一身份登录后，都可以新增一项共同待办。"}</span></div>`;
     return;
   }
-  const header = `<div class="record-row record-header"><div class="record-cell">日期</div><div class="record-cell">发生情境</div><div class="record-cell">我的语气</div><div class="record-cell">修复行动</div><div class="record-cell">她的确认</div><div class="record-cell">操作</div></div>`;
-  const rows = filtered.map((record) => `<div class="record-row"><div class="record-cell record-date" data-label="日期">${formatDate(record.date)}</div><div class="record-cell situation" data-label="情境"><strong>${escapeHtml(record.situation)}</strong><small>${escapeHtml(record.notes || "")}</small></div><div class="record-cell" data-label="语气"><span class="status-label">${escapeHtml(record.tone)}</span></div><div class="record-cell repair" data-label="修复行动"><small>${escapeHtml(record.repair)}</small></div><div class="record-cell" data-label="确认"><span class="status-label ${statusClass(record.confirmation)}">${escapeHtml(record.confirmation)}</span></div><div class="record-cell action-cell" data-label="操作">${recordActions(record)}</div></div>`).join("");
+  const header = `<div class="record-row record-header"><div class="record-cell">状态</div><div class="record-cell">计划日期</div><div class="record-cell">事项</div><div class="record-cell">分类</div><div class="record-cell">执行说明</div><div class="record-cell">记录人</div><div class="record-cell">操作</div></div>`;
+  const rows = filtered.map((record) => `<div class="record-row ${record.status === "已办" ? "is-done" : ""}"><div class="record-cell record-state-cell" data-label="状态"><button class="record-check" data-action="toggle-record" data-id="${record.id}" type="button" ${!canManageEntry(record) ? "disabled" : ""} aria-label="${record.status === "已办" ? "恢复为未办" : "标记为已办"}"><i data-lucide="${record.status === "已办" ? "check" : "circle"}"></i></button><span class="status-label ${statusClass(record.status)}">${escapeHtml(record.status)}</span></div><div class="record-cell record-date" data-label="计划日期">${formatDate(record.date)}</div><div class="record-cell situation" data-label="事项"><strong>${escapeHtml(record.title)}</strong><small>${escapeHtml(record.notes || "")}</small></div><div class="record-cell" data-label="分类"><span class="status-label">${escapeHtml(record.category)}</span></div><div class="record-cell repair" data-label="执行说明"><small>${escapeHtml(record.details || "暂无补充")}</small></div><div class="record-cell" data-label="记录人"><small>${creatorName(record)}</small></div><div class="record-cell action-cell" data-label="操作">${recordActions(record)}</div></div>`).join("");
   target.innerHTML = header + rows;
 }
 
@@ -679,7 +746,7 @@ function renderSettings() {
   $("#thresholdInput").value = data.settings.threshold;
   $("#periodStartInput").value = data.settings.periodStart;
   $("#agreementInput").value = data.settings.agreement;
-  const roleName = isRecorder() ? "方方 · 记录者" : isReviewer() ? "路路小皇帝 · 复核者" : "访客模式";
+  const roleName = isRecorder() ? "方方 · 共同记录" : isReviewer() ? "路路小皇帝 · 管理与复核" : "访客模式";
   $("#adminStatus").textContent = isAdmin ? `${roleName} · 已解锁` : roleName;
   $("#adminStatus").classList.toggle("is-admin", isAdmin);
   const adminButton = $("#adminButton");
@@ -695,9 +762,9 @@ function renderSettings() {
     element.hidden = !isAdmin;
     if (element.matches("button")) element.disabled = false;
   });
-  $$(".recorder-action").forEach((element) => { if (element.matches("button")) element.disabled = false; });
+  $$(".contributor-action").forEach((element) => { if (element.matches("button")) element.disabled = false; });
   $$(".reviewer-action").forEach((element) => { element.disabled = element.closest("#settingsForm") ? !isReviewer() : false; });
-  $("#taskTitleInput").disabled = !isRecorder();
+  $("#taskTitleInput").disabled = !isContributor();
   const cloudActive = Boolean(cloudContext);
   const cloudConfigured = cloudSchemaReady;
   const statusLabels = {
@@ -723,11 +790,12 @@ function renderSettings() {
   if (["checking", "authenticating", "migration", "syncing"].includes(cloudSyncState)) syncDot.classList.add("is-busy");
   if (["unavailable", "error"].includes(cloudSyncState)) syncDot.classList.add("is-error");
   $("#migrateCloudButton").hidden = !(cloudActive && pendingLocalMigration);
+  $("#syncCloudButton").hidden = !(cloudActive && isAdmin && !pendingLocalMigration);
   $("#localPasswordResetButton").hidden = cloudConfigured;
   $("#localPasswordResetNote").hidden = cloudConfigured;
   $("#authDescription").textContent = cloudConfigured
-    ? "使用 Supabase 验证身份并同步两台设备。刷新或重新进入后需要再次输入密码。"
-    : "云端表尚未初始化，暂时使用本机身份密码。刷新或重新进入后需要再次输入。";
+    ? "两种身份都可以记录；路路小皇帝拥有复核与全局管理权限。刷新或重新进入后需要再次输入密码。"
+    : "两种身份都可以记录；路路小皇帝拥有复核与全局管理权限。刷新或重新进入后需要再次输入。";
   $("#momentStorageStatus").textContent = cloudConfigured ? "Supabase 私有图片同步" : "本机图片缓存";
   $("#momentStorageNote").textContent = cloudActive ? "会自动压缩并同步到两人的私有云端。" : "会自动压缩并先保存在当前浏览器。";
   $("#passwordDescription").textContent = cloudActive ? "新密码会更新到当前 Supabase 身份。" : "新密码只保存在当前浏览器。";
@@ -795,6 +863,20 @@ function requireAdmin(action) {
   return false;
 }
 
+function requireContributor(action) {
+  if (isContributor()) return true;
+  openModal("authModal");
+  toast(action ? `请先选择任一身份登录后再${action}` : "请先选择身份登录");
+  return false;
+}
+
+function requireEntryAccess(entry, action) {
+  if (!requireContributor(action)) return false;
+  if (canManageEntry(entry)) return true;
+  toast(`方方只能${action}自己创建的内容，路路小皇帝可以管理全部内容`);
+  return false;
+}
+
 function selectLoginRole(role) {
   $("#loginRole").value = role;
   $$("[data-login-role]").forEach((button) => button.classList.toggle("is-selected", button.dataset.loginRole === role));
@@ -805,7 +887,7 @@ function requireRole(role, action) {
   if (currentRole === role) return true;
   selectLoginRole(role);
   openModal("authModal");
-  toast(`需要${role === "recorder" ? "方方记录者" : "路路小皇帝复核者"}身份才能${action}`);
+  toast(`需要${role === "recorder" ? "方方" : "路路小皇帝管理"}身份才能${action}`);
   return false;
 }
 
@@ -867,7 +949,7 @@ function unlock(role) {
   render();
   setView(role === "recorder" ? "daily" : "overview");
   const mode = cloudContext ? "，云端同步已连接" : "，当前为本机模式";
-  toast(`${role === "recorder" ? "方方记录身份已解锁" : "路路小皇帝复核身份已解锁"}${mode}`);
+  toast(`${role === "recorder" ? "方方共同记录身份已解锁" : "路路小皇帝管理身份已解锁"}${mode}`);
 }
 
 function resetLocalPassword() {
@@ -909,16 +991,15 @@ function checkAdminSession() {
 }
 
 function openRecordEditor(id = "") {
-  if (!requireRole("recorder", "编辑行为日志")) return;
   const record = data.records.find((item) => item.id === id);
-  $("#recordModalTitle").textContent = record ? "编辑复盘记录" : "新增复盘记录";
+  if (record ? !requireEntryAccess(record, "编辑") : !requireContributor("新增行为事项")) return;
+  $("#recordModalTitle").textContent = record ? "编辑行为事项" : "新增行为事项";
   $("#recordId").value = record?.id || "";
   $("#recordDate").value = record?.date || today();
-  $("#recordTone").value = record?.tone || "提高音量";
-  $("#recordSituation").value = record?.situation || "";
-  $("#recordRepair").value = record?.repair || "";
-  $("#recordConfirmation").value = record?.confirmation || "待确认";
-  $("#recordConfirmation").disabled = true;
+  $("#recordCategory").value = record?.category || "共同约定";
+  $("#recordTitle").value = record?.title || "";
+  $("#recordDetails").value = record?.details || "";
+  $("#recordStatus").value = record?.status || "未办";
   $("#recordNotes").value = record?.notes || "";
   openModal("recordModal");
 }
@@ -942,8 +1023,8 @@ function renderMomentImagePreview() {
 }
 
 function openMomentEditor(id = "") {
-  if (!requireRole("recorder", "记录美好生活")) return;
   const moment = data.moments.find((item) => item.id === id);
+  if (moment ? !requireEntryAccess(moment, "编辑") : !requireContributor("记录美好生活")) return;
   $("#momentModalTitle").textContent = moment ? "编辑美好记录" : "记录一件美好小事";
   $("#momentId").value = moment?.id || "";
   $("#momentDate").value = moment?.date || today();
@@ -958,8 +1039,8 @@ function openMomentEditor(id = "") {
 }
 
 function openIssueEditor(id = "") {
-  if (!requireRole("recorder", "记录当前问题")) return;
   const issue = data.issues.find((item) => item.id === id);
+  if (issue ? !requireEntryAccess(issue, "编辑") : !requireContributor("记录当前问题")) return;
   $("#issueModalTitle").textContent = issue ? "编辑问题记录" : "记录当前问题";
   $("#issueId").value = issue?.id || "";
   $("#issueDate").value = issue?.date || today();
@@ -981,9 +1062,8 @@ function updateIssue(id, status) {
 }
 
 function toggleTask(id) {
-  if (!requireRole("recorder", "更新手账任务")) return;
   const task = data.tasks.find((item) => item.id === id);
-  if (!task) return;
+  if (!task || !requireEntryAccess(task, "更新")) return;
   task.done = !task.done;
   if (!task.done) {
     task.reviewed = false;
@@ -992,6 +1072,16 @@ function toggleTask(id) {
   saveData();
   render();
   toast(task.done ? "任务已完成，等待路路复核" : "任务已恢复为待完成");
+}
+
+function toggleRecord(id) {
+  const record = data.records.find((item) => item.id === id);
+  if (!record || !requireEntryAccess(record, "更新")) return;
+  record.status = record.status === "已办" ? "未办" : "已办";
+  record.completedAt = record.status === "已办" ? today() : "";
+  saveData();
+  render();
+  toast(record.status === "已办" ? "事项已标记为已办" : "事项已恢复为未办");
 }
 
 function reviewTask(id) {
@@ -1070,13 +1160,13 @@ function csvCell(value) {
 
 function exportRecordsCsv() {
   if (!requireAdmin("导出记录")) return;
-  const rows = [["日期", "发生情境", "我的语气", "修复行动", "她的确认", "备注"], ...[...data.records].sort((a, b) => b.date.localeCompare(a.date)).map((record) => [record.date, record.situation, record.tone, record.repair, record.confirmation, record.notes || ""])];
-  downloadText(`沟通复盘记录-${today()}.csv`, `\uFEFF${rows.map((row) => row.map(csvCell).join(",")).join("\r\n")}`, "text/csv;charset=utf-8");
+  const rows = [["计划日期", "事项", "分类", "执行说明", "状态", "记录人", "完成日期", "备注"], ...[...data.records].sort((a, b) => b.date.localeCompare(a.date)).map((record) => [record.date, record.title, record.category, record.details, record.status, creatorName(record), record.completedAt || "", record.notes || ""])];
+  downloadText(`行为事项台账-${today()}.csv`, `\uFEFF${rows.map((row) => row.map(csvCell).join(",")).join("\r\n")}`, "text/csv;charset=utf-8");
   toast("CSV 已下载");
 }
 
 function importBackup() {
-  if (!requireAdmin("导入备份")) return;
+  if (!requireRole("reviewer", "导入备份")) return;
   if (!confirm("导入会覆盖当前记录；完整备份中的图片也会替换本地图片库。确定继续吗？")) return;
   $("#importFile").click();
 }
@@ -1126,32 +1216,36 @@ document.addEventListener("click", async (event) => {
     else pendingMomentImages.splice(Number(actionElement.dataset.id), 1);
     renderMomentImagePreview();
   }
-  if (action === "delete-moment" && requireRole("recorder", "删除美好记录") && confirm("确定删除这条美好记录和其中的本地照片吗？")) {
+  if (action === "delete-moment") {
     const moment = data.moments.find((item) => item.id === actionElement.dataset.id);
+    if (!moment || !requireEntryAccess(moment, "删除") || !confirm("确定删除这条美好记录和其中的照片吗？")) return;
     for (const id of moment?.imageIds || []) await deleteMedia(id).catch(() => {});
     data.moments = data.moments.filter((item) => item.id !== actionElement.dataset.id);
     saveData(); render(); toast("美好记录已删除");
   }
   if (action === "toggle-task") toggleTask(actionElement.dataset.id);
   if (action === "review-task") reviewTask(actionElement.dataset.id);
-  if (action === "delete-task" && requireRole("recorder", "删除手账任务") && confirm("确定删除这项任务吗？")) {
+  if (action === "delete-task") {
+    const task = data.tasks.find((item) => item.id === actionElement.dataset.id);
+    if (!task || !requireEntryAccess(task, "删除") || !confirm("确定删除这项任务吗？")) return;
     data.tasks = data.tasks.filter((item) => item.id !== actionElement.dataset.id);
     saveData(); render(); toast("任务已删除");
   }
   if (action === "new-record") openRecordEditor();
   if (action === "edit-record") openRecordEditor(actionElement.dataset.id);
-  if (action === "confirm-record" && requireRole("reviewer", "复核行为日志")) {
+  if (action === "toggle-record") toggleRecord(actionElement.dataset.id);
+  if (action === "delete-record") {
     const record = data.records.find((item) => item.id === actionElement.dataset.id);
-    if (record) { record.confirmation = actionElement.dataset.status; saveData(); render(); toast("行为日志复核状态已更新"); }
-  }
-  if (action === "delete-record" && requireRole("recorder", "删除行为日志") && confirm("确定删除这条行为日志吗？")) {
+    if (!record || !requireEntryAccess(record, "删除") || !confirm("确定删除这项行为事项吗？")) return;
     data.records = data.records.filter((record) => record.id !== actionElement.dataset.id);
-    saveData(); render(); toast("记录已删除");
+    saveData(); render(); toast("行为事项已删除");
   }
   if (action === "new-issue") openIssueEditor();
   if (action === "edit-issue") openIssueEditor(actionElement.dataset.id);
   if (action === "update-issue") updateIssue(actionElement.dataset.id, actionElement.dataset.status);
-  if (action === "delete-issue" && requireRole("recorder", "删除问题记录") && confirm("确定删除这条问题沟通记录吗？")) {
+  if (action === "delete-issue") {
+    const issue = data.issues.find((item) => item.id === actionElement.dataset.id);
+    if (!issue || !requireEntryAccess(issue, "删除") || !confirm("确定删除这条问题沟通记录吗？")) return;
     data.issues = data.issues.filter((item) => item.id !== actionElement.dataset.id);
     saveData(); render(); toast("问题记录已删除");
   }
@@ -1171,6 +1265,7 @@ document.addEventListener("click", async (event) => {
   if (action === "export-csv") exportRecordsCsv();
   if (action === "import") importBackup();
   if (action === "migrate-cloud") migrateLocalDataToCloud();
+  if (action === "sync-cloud") syncCloudNow();
   if (action === "logout") logout();
   if (action === "reset-password" && !cloudSchemaReady && confirm("只重置当前所选身份在这个浏览器中的密码，不会删除数据。确定继续吗？")) resetLocalPassword();
   if (action === "change-password" && requireAdmin("修改密码")) {
@@ -1214,13 +1309,27 @@ $("#authForm").addEventListener("submit", async (event) => {
 
 $("#recordForm").addEventListener("submit", (event) => {
   event.preventDefault();
-  if (!requireRole("recorder", "保存行为日志")) return;
+  if (!requireContributor("保存行为事项")) return;
   const id = $("#recordId").value || `record-${Date.now()}`;
-  const record = { id, date: $("#recordDate").value, tone: $("#recordTone").value, situation: $("#recordSituation").value.trim(), repair: $("#recordRepair").value.trim(), confirmation: "待确认", notes: $("#recordNotes").value.trim() };
   const existingIndex = data.records.findIndex((item) => item.id === id);
+  const existing = existingIndex >= 0 ? data.records[existingIndex] : null;
+  if (existing && !requireEntryAccess(existing, "编辑")) return;
+  const status = $("#recordStatus").value;
+  const record = {
+    id,
+    date: $("#recordDate").value,
+    title: $("#recordTitle").value.trim(),
+    category: $("#recordCategory").value,
+    details: $("#recordDetails").value.trim(),
+    status,
+    notes: $("#recordNotes").value.trim(),
+    completedAt: status === "已办" ? (existing?.completedAt || today()) : "",
+    createdBy: existing?.createdBy || currentRole,
+    createdAt: existing?.createdAt || new Date().toISOString(),
+  };
   if (existingIndex >= 0) data.records[existingIndex] = record;
   else data.records.push(record);
-  saveData(); closeModal("recordModal"); render(); toast(existingIndex >= 0 ? "记录已更新" : "记录已保存");
+  saveData(); closeModal("recordModal"); render(); toast(existingIndex >= 0 ? "行为事项已更新" : "行为事项已加入台账");
 });
 
 $("#momentImages").addEventListener("change", async (event) => {
@@ -1243,8 +1352,11 @@ $("#momentImages").addEventListener("change", async (event) => {
 
 $("#momentForm").addEventListener("submit", async (event) => {
   event.preventDefault();
-  if (!requireRole("recorder", "保存美好记录")) return;
+  if (!requireContributor("保存美好记录")) return;
   const id = $("#momentId").value || `moment-${Date.now()}`;
+  const existingIndex = data.moments.findIndex((item) => item.id === id);
+  const existing = existingIndex >= 0 ? data.moments[existingIndex] : null;
+  if (existing && !requireEntryAccess(existing, "编辑")) return;
   try {
     for (const image of pendingMomentImages) await putMedia(image);
     for (const removedId of originalMomentImageIds.filter((imageId) => !editingMomentImageIds.includes(imageId))) await deleteMedia(removedId);
@@ -1253,8 +1365,7 @@ $("#momentForm").addEventListener("submit", async (event) => {
     toast("图片未能完整保存，请检查网络后重试");
     return;
   }
-  const existingIndex = data.moments.findIndex((item) => item.id === id);
-  const moment = { id, date: $("#momentDate").value, title: $("#momentTitle").value.trim(), note: $("#momentNote").value.trim(), imageIds: [...editingMomentImageIds, ...pendingMomentImages.map((image) => image.id)], reviewStatus: "待复核", reviewedAt: "", createdBy: "recorder" };
+  const moment = { id, date: $("#momentDate").value, title: $("#momentTitle").value.trim(), note: $("#momentNote").value.trim(), imageIds: [...editingMomentImageIds, ...pendingMomentImages.map((image) => image.id)], reviewStatus: "待复核", reviewedAt: "", createdBy: existing?.createdBy || currentRole };
   if (existingIndex >= 0) data.moments[existingIndex] = moment;
   else data.moments.push(moment);
   pendingMomentImages = [];
@@ -1265,11 +1376,11 @@ $("#momentForm").addEventListener("submit", async (event) => {
 
 $("#taskQuickForm").addEventListener("submit", (event) => {
   event.preventDefault();
-  if (!requireRole("recorder", "添加手账任务")) return;
+  if (!requireContributor("添加手账任务")) return;
   const title = $("#taskTitleInput").value.trim();
   if (!title) { toast("请先写下要做的事情"); return; }
   const date = $("#taskDateFilter").value || today();
-  data.tasks.push({ id: `task-${Date.now()}`, date, title, done: false, reviewed: false, reviewedAt: "", createdAt: new Date().toISOString(), createdBy: "recorder" });
+  data.tasks.push({ id: `task-${Date.now()}`, date, title, done: false, reviewed: false, reviewedAt: "", createdAt: new Date().toISOString(), createdBy: currentRole });
   $("#taskTitleInput").value = "";
   saveData(); render(); toast("任务已加入手账");
 });
@@ -1281,10 +1392,12 @@ $("#taskDateFilter").addEventListener("change", () => {
 
 $("#issueForm").addEventListener("submit", (event) => {
   event.preventDefault();
-  if (!requireRole("recorder", "保存问题记录")) return;
+  if (!requireContributor("保存问题记录")) return;
   const id = $("#issueId").value || `issue-${Date.now()}`;
   const existingIndex = data.issues.findIndex((item) => item.id === id);
-  const issue = { id, date: $("#issueDate").value, title: $("#issueTitle").value.trim(), description: $("#issueDescription").value.trim(), proposal: $("#issueProposal").value.trim(), status: "待沟通", reviewedAt: "", createdBy: "recorder" };
+  const existing = existingIndex >= 0 ? data.issues[existingIndex] : null;
+  if (existing && !requireEntryAccess(existing, "编辑")) return;
+  const issue = { id, date: $("#issueDate").value, title: $("#issueTitle").value.trim(), description: $("#issueDescription").value.trim(), proposal: $("#issueProposal").value.trim(), status: existing?.status || "待沟通", reviewedAt: existing?.reviewedAt || "", createdBy: existing?.createdBy || currentRole };
   if (existingIndex >= 0) data.issues[existingIndex] = issue;
   else data.issues.push(issue);
   saveData(); closeModal("issueModal"); render(); toast(existingIndex >= 0 ? "问题记录已更新" : "问题已记录，等待沟通");
@@ -1377,6 +1490,14 @@ window.addEventListener("pageshow", (event) => {
   currentRole = null;
   lastAdminActivity = 0;
   render();
+});
+window.addEventListener("offline", () => setCloudSyncState("unavailable", "网络已断开，修改会先保存在当前浏览器"));
+window.addEventListener("online", async () => {
+  if (cloudContext && isAdmin) await syncCloudNow();
+  else {
+    await initializeCloud();
+    render();
+  }
 });
 document.addEventListener("pointerdown", touchAdminSession, { passive: true });
 document.addEventListener("keydown", (event) => {

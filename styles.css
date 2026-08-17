@@ -129,6 +129,7 @@ a { color: inherit; text-decoration: none; }
 .activity-item small { color: var(--ink-soft); font-size: 11px; }
 .status-label { white-space: nowrap; font-size: 10px; padding: 5px 7px; border-radius: 6px; background: #eef2f1; color: var(--ink-soft); }
 .status-label.confirmed, .status-label.done { background: var(--mint); color: var(--mint-deep); }
+.status-label.progress { background: #fff3cf; color: #8a6515; }
 .status-label.needs { background: var(--coral-pale); color: #a94f3d; }
 .wish-preview-item { display: flex; align-items: center; gap: 11px; padding: 12px; background: #fbfaf6; border: 1px solid #ecebe3; border-radius: 12px; }
 .wish-bullet { width: 24px; height: 24px; display: grid; place-items: center; border-radius: 8px; background: var(--yellow); color: #8d6a0b; flex: 0 0 auto; }
@@ -219,14 +220,19 @@ a { color: inherit; text-decoration: none; }
 .filter-summary { display: flex; justify-content: space-between; gap: 14px; margin-bottom: 12px; padding: 0 2px; color: var(--ink-soft); font-size: 10px; }
 .filter-summary strong, .filter-summary b { color: var(--ink); font: 500 10px "DM Mono", monospace; }
 .records-table { display: grid; gap: 8px; }
-.record-row { display: grid; grid-template-columns: 92px minmax(140px, 1.2fr) 130px minmax(180px, 1.4fr) 110px 90px; align-items: center; gap: 14px; min-height: 72px; padding: 13px 15px; border-radius: 13px; background: var(--paper); border: 1px solid var(--line); }
+.record-row { display: grid; grid-template-columns: 112px 90px minmax(150px, 1.2fr) 108px minmax(170px, 1.35fr) 82px 76px; align-items: center; gap: 12px; min-height: 72px; padding: 13px 15px; border-radius: 13px; background: var(--paper); border: 1px solid var(--line); }
 .record-row.record-header { min-height: 38px; padding-block: 8px; background: var(--navy); border-color: var(--navy); color: white; font-size: 11px; font-weight: 700; }
+.record-row.is-done .situation strong { color: var(--ink-soft); text-decoration: line-through; }
 .record-cell { min-width: 0; font-size: 12px; }
 .record-cell strong { display: block; font-size: 12px; margin-bottom: 3px; }
 .record-cell small { display: block; color: var(--ink-soft); font-size: 10px; line-height: 1.45; }
 .record-header .record-cell small { color: rgba(255,255,255,.7); }
 .record-date { font: 500 11px "DM Mono", monospace; color: var(--mint-deep); }
 .record-header .record-date { color: white; }
+.record-state-cell { display: flex; align-items: center; gap: 6px; }
+.record-check { width: 30px; height: 30px; flex: 0 0 auto; display: grid; place-items: center; border: 1px solid var(--line); border-radius: 8px; background: white; color: var(--mint-deep); }
+.record-check:disabled { cursor: default; opacity: .58; }
+.record-check svg { width: 15px; height: 15px; }
 .row-actions { display: flex; justify-content: end; gap: 4px; }
 .icon-button { width: 30px; height: 30px; display: inline-grid; place-items: center; border: 0; border-radius: 8px; background: transparent; color: var(--ink-soft); }
 .icon-button:hover { color: var(--navy); background: var(--mint); }
@@ -342,7 +348,7 @@ input:not(:disabled):focus, select:not(:disabled):focus, textarea:not(:disabled)
   .stats-grid { grid-template-columns: repeat(2, 1fr); }
   .dashboard-grid, .dashboard-grid-bottom, .settings-grid { grid-template-columns: 1fr; }
   .wish-grid { grid-template-columns: repeat(2, 1fr); }
-  .record-row { grid-template-columns: 92px minmax(130px, 1fr) 120px minmax(170px, 1.2fr) 110px 74px; }
+  .record-row { grid-template-columns: 108px 88px minmax(145px, 1fr) 104px minmax(160px, 1.2fr) 80px 72px; }
   .record-toolbar { grid-template-columns: 1fr 1fr; }
   .moments-grid, .issue-grid { grid-template-columns: 1fr; }
 }
@@ -356,7 +362,7 @@ input:not(:disabled):focus, select:not(:disabled):focus, textarea:not(:disabled)
   .button-quiet span { display: none; }
   .button-quiet { width: 38px; height: 38px; padding: 0; background: rgba(23,49,73,.06); }
   .welcome-strip { padding: 28px 23px 24px; min-height: 310px; display: flex; flex-direction: column; justify-content: space-between; gap: 24px; }
-  .welcome-copy h1 { font-size: 34px; margin-top: 12px; }
+  .welcome-copy h1 { font-size: 30px; margin-top: 12px; }
   .welcome-description { font-size: 12px; line-height: 1.65; max-width: 280px; }
   .today-card { align-self: stretch; min-width: 0; padding: 14px 0 0; border-left: 0; border-top: 1px solid rgba(255,255,255,.2); display: flex; align-items: baseline; gap: 9px; }
   .today-card strong { font-size: 18px; }
@@ -407,6 +413,7 @@ input:not(:disabled):focus, select:not(:disabled):focus, textarea:not(:disabled)
   .record-cell { min-height: 30px; }
   .record-cell::before { content: attr(data-label); display: block; margin-bottom: 4px; color: var(--ink-soft); font: 500 9px "DM Mono", monospace; letter-spacing: .05em; text-transform: uppercase; }
   .record-cell.record-date::before { content: "DATE"; }
+  .record-cell.record-state-cell { align-items: flex-start; flex-direction: column; }
   .record-cell.situation { grid-column: span 2; }
   .record-cell.repair { grid-column: span 2; }
   .record-cell.action-cell { grid-column: span 2; justify-content: flex-start; }

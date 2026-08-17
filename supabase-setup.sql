@@ -128,6 +128,8 @@ set search_path = public
 as $$
 declare
   v_household_id uuid;
+  v_member_role text;
+  v_existing_payload jsonb;
 begin
   if auth.uid() is null then
     raise exception 'AUTH_REQUIRED' using errcode = '42501';
@@ -137,13 +139,30 @@ begin
     raise exception 'INVALID_PAYLOAD' using errcode = '22023';
   end if;
 
-  select member.household_id
-  into v_household_id
+  select member.household_id, member.role
+  into v_household_id, v_member_role
   from public.household_members member
   where member.user_id = auth.uid();
 
   if v_household_id is null then
     raise exception 'MEMBERSHIP_REQUIRED' using errcode = '42501';
+  end if;
+
+  select state.payload
+  into v_existing_payload
+  from public.house_state state
+  where state.household_id = v_household_id;
+
+  -- Both members may record shared life. Only the reviewer may change
+  -- household rules, the wish catalog, or redemption history after bootstrap.
+  if v_member_role = 'recorder'
+     and coalesce(v_existing_payload, '{}'::jsonb) <> '{}'::jsonb
+     and (
+       (p_payload -> 'settings') is distinct from (v_existing_payload -> 'settings')
+       or (p_payload -> 'wishes') is distinct from (v_existing_payload -> 'wishes')
+       or (p_payload -> 'redemptions') is distinct from (v_existing_payload -> 'redemptions')
+     ) then
+    raise exception 'REVIEWER_PERMISSION_REQUIRED' using errcode = '42501';
   end if;
 
   return query

@@ -4,17 +4,17 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <meta name="theme-color" content="#f7f3eb" />
-    <meta name="description" content="路路与方方的沟通复盘、心愿兑换和共同生活记录。" />
+    <meta name="description" content="路路与方方记录日常、共同计划、问题沟通和心愿的恋爱小平台。" />
     <title>路路 × 方方 | 我们的小站</title>
     <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23173149'/%3E%3Ctext x='32' y='40' text-anchor='middle' font-family='Arial' font-size='21' font-weight='700' fill='white'%3EL%2BF%3C/text%3E%3C/svg%3E" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Noto+Sans+SC:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
-    <link rel="stylesheet" href="styles.css?v=20260817-7" />
+    <link rel="stylesheet" href="styles.css?v=20260817-8" />
     <script src="https://unpkg.com/lucide@latest" defer></script>
-    <script src="supabase-config.js?v=20260817-7" defer></script>
+    <script src="supabase-config.js?v=20260817-8" defer></script>
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.112.3/dist/umd/supabase.min.js" defer></script>
-    <script src="app.js?v=20260817-7" defer></script>
+    <script src="app.js?v=20260817-8" defer></script>
   </head>
   <body>
     <div class="app-shell">
@@ -37,14 +37,14 @@
       <main class="page-shell">
         <section class="welcome-strip">
           <div class="welcome-copy">
-            <p class="eyebrow">A SMALL PLACE FOR TWO</p>
-            <h1>把每一次修复，<br /><em>都变成下一次靠近。</em></h1>
-            <p class="welcome-description">记录语气、行动和心愿，给生活留一点被认真对待的证据。</p>
+            <p class="eyebrow">OUR EVERYDAY, TOGETHER</p>
+            <h1>把两个人的日常，<br /><em>认真过成我们的故事。</em></h1>
+            <p class="welcome-description">收藏美好、安排计划、认真沟通，也把每一份想实现的心愿留在这里。</p>
           </div>
           <div class="today-card">
             <span class="today-label">TODAY</span>
             <strong id="todayLabel">--</strong>
-            <span id="todayNote">一起把话说好</span>
+            <span id="todayNote">今天也一起好好生活</span>
           </div>
         </section>
 
@@ -61,15 +61,15 @@
           <div class="stats-grid">
             <article class="stat-card stat-card-dark">
               <div class="stat-icon"><i data-lucide="message-circle-heart" aria-hidden="true"></i></div>
-              <div><span>本周期记录</span><strong id="statRecords">0</strong><small id="statPeriod">从本周期开始计算</small></div>
+              <div><span>本周期已办</span><strong id="statRecords">0</strong><small id="statPeriod">从本周期开始计算</small></div>
             </article>
             <article class="stat-card stat-card-mint">
               <div class="stat-icon"><i data-lucide="ticket-check" aria-hidden="true"></i></div>
-              <div><span>可兑换心愿</span><strong id="statAvailable">0</strong><small id="statThreshold">每 3 次记录兑换 1 份</small></div>
+              <div><span>可兑换心愿</span><strong id="statAvailable">0</strong><small id="statThreshold">每 3 项已办兑换 1 份</small></div>
             </article>
             <article class="stat-card stat-card-coral">
               <div class="stat-icon"><i data-lucide="hand-heart" aria-hidden="true"></i></div>
-              <div><span>待确认记录</span><strong id="statPending">0</strong><small>需要再沟通也可以标记</small></div>
+              <div><span>待办事项</span><strong id="statPending">0</strong><small>包含未办与进行中</small></div>
             </article>
             <article class="stat-card stat-card-cream">
               <div class="stat-icon"><i data-lucide="check-check" aria-hidden="true"></i></div>
@@ -80,7 +80,7 @@
           <div class="dashboard-grid">
             <article class="panel progress-panel">
               <div class="panel-heading"><div><p class="eyebrow">NEXT LITTLE THING</p><h2>下一份心愿</h2></div><span class="panel-kicker" id="progressKicker">0 / 3</span></div>
-              <div class="progress-copy"><strong id="progressHeadline">还差 3 次记录</strong><span id="progressSubline">完成一次修复，就离心愿更近一点。</span></div>
+              <div class="progress-copy"><strong id="progressHeadline">还差 3 项已办</strong><span id="progressSubline">把一件约定认真做完，就离心愿更近一点。</span></div>
               <div class="progress-track" aria-label="兑换进度"><span id="progressBar"></span></div>
               <div class="progress-meta"><span id="progressStart">本周期起点 --</span><span id="progressHint">继续加油</span></div>
               <div class="balance-strip">
@@ -88,12 +88,12 @@
                 <div><span>已经使用</span><strong id="usedCount">0</strong></div>
                 <div class="balance-highlight"><span>当前余额</span><strong id="balanceCount">0</strong></div>
               </div>
-              <div class="week-trend-block"><div class="week-trend-heading"><span>近 7 天记录</span><strong id="weekRecordCount">0 次</strong></div><div class="week-trend" id="weekTrend" aria-label="近七天记录趋势"></div></div>
-              <div class="action-row"><button class="button button-primary" data-action="new-record" type="button"><i data-lucide="plus" aria-hidden="true"></i>新增复盘</button><button class="button button-outline" data-view-target="wishes" type="button"><i data-lucide="gift" aria-hidden="true"></i>看心愿</button></div>
+              <div class="week-trend-block"><div class="week-trend-heading"><span>近 7 天已办</span><strong id="weekRecordCount">0 项</strong></div><div class="week-trend" id="weekTrend" aria-label="近七天已办趋势"></div></div>
+              <div class="action-row"><button class="button button-primary" data-action="new-record" type="button"><i data-lucide="plus" aria-hidden="true"></i>新增事项</button><button class="button button-outline" data-view-target="wishes" type="button"><i data-lucide="gift" aria-hidden="true"></i>看心愿</button></div>
             </article>
 
             <article class="panel activity-panel">
-              <div class="panel-heading"><div><p class="eyebrow">RECENT NOTES</p><h2>最近的记录</h2></div><button class="text-button" data-view-target="records" type="button">查看全部 <i data-lucide="arrow-up-right" aria-hidden="true"></i></button></div>
+              <div class="panel-heading"><div><p class="eyebrow">SHARED ACTIONS</p><h2>最近的行为事项</h2></div><button class="text-button" data-view-target="records" type="button">查看全部 <i data-lucide="arrow-up-right" aria-hidden="true"></i></button></div>
               <div id="recentRecords" class="activity-list"></div>
             </article>
           </div>
@@ -106,30 +106,30 @@
             <article class="panel note-panel">
               <div class="note-mark"><i data-lucide="quote" aria-hidden="true"></i></div>
               <p class="eyebrow">OUR AGREEMENT</p>
-              <blockquote id="agreementNote">先修复，再兑换。双方都舒服的时候，心愿才算真正兑现。</blockquote>
+              <blockquote id="agreementNote">把想做的事认真写下，把答应彼此的事慢慢完成。一起记录，也一起把生活过好。</blockquote>
               <div class="note-signature"><span></span><small>路路 & 方方共同确认</small></div>
             </article>
           </div>
         </section>
 
         <section class="view" id="dailyView" data-view-panel="daily" hidden>
-          <div class="view-heading"><div><p class="eyebrow">BEAUTIFUL DAYS</p><h2>日常美好记录</h2><p>把值得记住的小事和照片留在这里，由方方记录，路路小皇帝复核。</p></div><button class="button button-primary recorder-action" data-action="new-moment" type="button"><i data-lucide="image-plus" aria-hidden="true"></i>记录美好</button></div>
-          <div class="module-status-strip"><span><i data-lucide="pen-line"></i>方方负责记录</span><span><i data-lucide="badge-check"></i>路路小皇帝负责复核</span><span><i data-lucide="cloud"></i><b id="momentStorageStatus">本机图片缓存</b></span></div>
+          <div class="view-heading"><div><p class="eyebrow">BEAUTIFUL DAYS</p><h2>日常美好记录</h2><p>两个人都可以把值得记住的小事和照片留在这里，路路小皇帝负责全局管理与复核。</p></div><button class="button button-primary contributor-action" data-action="new-moment" type="button"><i data-lucide="image-plus" aria-hidden="true"></i>记录美好</button></div>
+          <div class="module-status-strip"><span><i data-lucide="pen-line"></i>方方与路路都可记录</span><span><i data-lucide="crown"></i>路路拥有全局管理权限</span><span><i data-lucide="cloud"></i><b id="momentStorageStatus">本机图片缓存</b></span></div>
           <div class="moments-grid" id="momentsGrid"></div>
 
           <section class="journal-section">
             <div class="section-heading"><div><p class="eyebrow">DAILY JOURNAL</p><h3>每日手账清单</h3></div><label class="date-filter">查看日期<input id="taskDateFilter" type="date" /></label></div>
-            <form class="task-quick-form" id="taskQuickForm"><input id="taskTitleInput" type="text" placeholder="写下今天要做的一件事" maxlength="80" /><button class="button button-primary recorder-action" type="submit"><i data-lucide="plus"></i>加入清单</button></form>
+            <form class="task-quick-form" id="taskQuickForm"><input id="taskTitleInput" type="text" placeholder="写下今天要做的一件事" maxlength="80" /><button class="button button-primary contributor-action" type="submit"><i data-lucide="plus"></i>加入清单</button></form>
             <div class="task-progress"><span id="taskProgressText">今天还没有任务</span><div class="task-progress-track"><span id="taskProgressBar"></span></div></div>
             <div class="task-list" id="taskList"></div>
           </section>
         </section>
 
         <section class="view" id="recordsView" data-view-panel="records" hidden>
-          <div class="view-heading"><div><p class="eyebrow">BEHAVIOR LOG</p><h2>行为日志记录</h2><p>方方记录发生的情境和修复行动，路路小皇帝进行复核。</p></div><button class="button button-primary recorder-action" data-action="new-record" type="button"><i data-lucide="plus" aria-hidden="true"></i>新增记录</button></div>
+          <div class="view-heading"><div><p class="eyebrow">SHARED ACTION LEDGER</p><h2>行为事项台账</h2><p>像 Todo List 一样记录共同约定、行动计划和完成情况；双方都能新增，路路可管理全部事项。</p></div><button class="button button-primary contributor-action" data-action="new-record" type="button"><i data-lucide="plus" aria-hidden="true"></i>新增事项</button></div>
           <div class="record-toolbar">
-            <label class="search-control"><i data-lucide="search" aria-hidden="true"></i><input id="recordSearch" type="search" placeholder="搜索情境、行动或备注" /></label>
-            <label class="select-control"><span>状态</span><select id="recordStatusFilter"><option value="all">全部状态</option><option value="待确认">待确认</option><option value="已确认">已确认</option><option value="需要再沟通">需要再沟通</option></select></label>
+            <label class="search-control"><i data-lucide="search" aria-hidden="true"></i><input id="recordSearch" type="search" placeholder="搜索事项、分类、说明或记录人" /></label>
+            <label class="select-control"><span>状态</span><select id="recordStatusFilter"><option value="all">全部状态</option><option value="未办">未办</option><option value="进行中">进行中</option><option value="已办">已办</option></select></label>
             <label class="switch-control"><input id="cycleOnlyFilter" type="checkbox" /><span>仅本周期</span></label>
             <button class="button button-outline admin-only" data-action="export-csv" type="button" hidden><i data-lucide="file-down" aria-hidden="true"></i>导出 CSV</button>
           </div>
@@ -138,7 +138,7 @@
         </section>
 
         <section class="view" id="issuesView" data-view-panel="issues" hidden>
-          <div class="view-heading"><div><p class="eyebrow">CURRENT ISSUES</p><h2>现在的问题沟通记录</h2><p>把当前问题、彼此感受和下一步方案分开写清楚，让沟通有结果。</p></div><button class="button button-primary recorder-action" data-action="new-issue" type="button"><i data-lucide="message-square-plus" aria-hidden="true"></i>记录问题</button></div>
+          <div class="view-heading"><div><p class="eyebrow">CURRENT ISSUES</p><h2>现在的问题沟通记录</h2><p>把当前问题、彼此感受和下一步方案分开写清楚；双方都能记录，路路负责推进与确认结果。</p></div><button class="button button-primary contributor-action" data-action="new-issue" type="button"><i data-lucide="message-square-plus" aria-hidden="true"></i>记录问题</button></div>
           <div class="issue-summary" id="issueSummary"></div>
           <div class="issue-grid" id="issueGrid"></div>
         </section>
@@ -154,12 +154,12 @@
         </section>
 
         <section class="view" id="settingsView" data-view-panel="settings" hidden>
-          <div class="view-heading"><div><p class="eyebrow">HOUSE RULES</p><h2>规则与数据</h2><p>规则由路路小皇帝复核调整，备份功能两种身份都可以使用。</p></div><span class="admin-status" id="adminStatus">访客模式</span></div>
+          <div class="view-heading"><div><p class="eyebrow">HOUSE RULES</p><h2>规则与数据</h2><p>两种身份都可以导出备份；规则调整和备份导入由路路小皇帝管理。</p></div><span class="admin-status" id="adminStatus">访客模式</span></div>
           <div class="settings-grid">
             <article class="panel settings-panel">
               <div class="panel-heading"><div><p class="eyebrow">EDITABLE RULES</p><h3>兑换规则</h3></div><i data-lucide="sliders-horizontal" aria-hidden="true"></i></div>
               <form id="settingsForm" class="form-stack">
-                <label>每多少次记录兑换 1 份心愿<input id="thresholdInput" name="threshold" type="number" min="1" max="99" required disabled /></label>
+                <label>每多少项已办兑换 1 份心愿<input id="thresholdInput" name="threshold" type="number" min="1" max="99" required disabled /></label>
                 <label>本周期开始日期<input id="periodStartInput" name="periodStart" type="date" required disabled /></label>
                 <label>共同约定<textarea id="agreementInput" name="agreement" rows="4" required disabled></textarea></label>
                 <button class="button button-primary reviewer-action" type="submit" disabled><i data-lucide="save" aria-hidden="true"></i>保存规则</button>
@@ -169,7 +169,7 @@
               <div class="panel-heading"><div><p class="eyebrow">CLOUD DATA</p><h3>数据与权限</h3></div><i data-lucide="shield-check" aria-hidden="true"></i></div>
               <div class="data-note"><strong id="cloudModeTitle">正在检查云端连接</strong><span id="cloudModeDescription">本机缓存会继续保留，Supabase 初始化完成后自动启用跨设备同步。</span></div>
               <div class="cloud-sync-line"><span class="cloud-sync-dot" id="cloudSyncDot"></span><div><strong id="cloudSyncStatus">连接检查中</strong><small id="cloudSyncDetail">正在连接 Supabase</small></div></div>
-              <div class="data-actions"><button class="button button-primary" id="migrateCloudButton" data-action="migrate-cloud" type="button" hidden><i data-lucide="cloud-upload" aria-hidden="true"></i>迁移本机数据到云端</button><button class="button button-outline admin-only" data-action="export" type="button" hidden><i data-lucide="download" aria-hidden="true"></i>导出完整备份</button><button class="button button-outline admin-only" data-action="export-csv" type="button" hidden><i data-lucide="file-down" aria-hidden="true"></i>导出记录 CSV</button><button class="button button-outline admin-only" data-action="import" type="button" hidden><i data-lucide="upload" aria-hidden="true"></i>导入备份</button><input type="file" id="importFile" accept="application/json" hidden /></div>
+              <div class="data-actions"><button class="button button-primary" id="migrateCloudButton" data-action="migrate-cloud" type="button" hidden><i data-lucide="cloud-upload" aria-hidden="true"></i>迁移本机数据到云端</button><button class="button button-outline admin-only" id="syncCloudButton" data-action="sync-cloud" type="button" hidden><i data-lucide="refresh-cw" aria-hidden="true"></i>立即同步</button><button class="button button-outline admin-only" data-action="export" type="button" hidden><i data-lucide="download" aria-hidden="true"></i>导出完整备份</button><button class="button button-outline admin-only" data-action="export-csv" type="button" hidden><i data-lucide="file-down" aria-hidden="true"></i>导出事项 CSV</button><button class="button button-outline admin-only" data-action="import" type="button" hidden><i data-lucide="upload" aria-hidden="true"></i>导入备份</button><input type="file" id="importFile" accept="application/json" hidden /></div>
               <div class="session-note"><i data-lucide="timer-reset" aria-hidden="true"></i><span>页面刷新、重新进入或 30 分钟无操作后都会重新锁定。</span></div>
               <div class="divider"></div>
               <button class="text-button admin-only" data-action="change-password" type="button" hidden><i data-lucide="key-round" aria-hidden="true"></i>修改当前身份密码</button>
@@ -186,8 +186,8 @@
       <div class="modal-card auth-card" role="dialog" aria-modal="true" aria-labelledby="authTitle">
         <button class="modal-close" data-close-modal="authModal" type="button" aria-label="关闭"><i data-lucide="x" aria-hidden="true"></i></button>
         <div class="modal-icon"><i data-lucide="users-round" aria-hidden="true"></i></div>
-        <p class="eyebrow">IDENTITY ACCESS</p><h2 id="authTitle">选择身份并解锁</h2><p class="modal-description" id="authDescription">方方负责记录，路路小皇帝负责复核。刷新或重新进入页面后需要再次输入密码。</p>
-        <div class="role-selector"><button class="role-option is-selected" data-login-role="recorder" type="button"><i data-lucide="pen-line"></i><strong>方方</strong><span>记录者</span></button><button class="role-option" data-login-role="reviewer" type="button"><i data-lucide="crown"></i><strong>路路小皇帝</strong><span>复核者</span></button></div>
+        <p class="eyebrow">IDENTITY ACCESS</p><h2 id="authTitle">选择身份并解锁</h2><p class="modal-description" id="authDescription">两种身份都可以记录；路路小皇帝拥有复核与全局管理权限。刷新或重新进入后需要再次输入密码。</p>
+        <div class="role-selector"><button class="role-option is-selected" data-login-role="recorder" type="button"><i data-lucide="pen-line"></i><strong>方方</strong><span>共同记录者</span></button><button class="role-option" data-login-role="reviewer" type="button"><i data-lucide="crown"></i><strong>路路小皇帝</strong><span>管理与复核</span></button></div>
         <form id="authForm" class="form-stack"><input id="loginRole" type="hidden" value="recorder" /><label>身份密码<input id="passwordInput" type="password" inputmode="numeric" autocomplete="current-password" placeholder="输入身份密码" required /></label><p class="form-error" id="authError" hidden>密码不正确，请重试。</p><button class="button button-primary button-full" id="authSubmitButton" type="submit">解锁当前身份 <i data-lucide="arrow-right" aria-hidden="true"></i></button><button class="auth-reset-button" id="localPasswordResetButton" data-action="reset-password" type="button"><i data-lucide="rotate-ccw-key" aria-hidden="true"></i><span>重置当前身份为初始密码</span></button><small class="auth-reset-note" id="localPasswordResetNote">只重置当前浏览器中的密码，不会删除记录或图片。</small></form>
       </div>
     </div>
@@ -203,8 +203,8 @@
     <div class="modal-backdrop" id="recordModal" hidden>
       <div class="modal-card large-modal" role="dialog" aria-modal="true" aria-labelledby="recordModalTitle">
         <button class="modal-close" data-close-modal="recordModal" type="button" aria-label="关闭"><i data-lucide="x" aria-hidden="true"></i></button>
-        <p class="eyebrow">COMMUNICATION LOG</p><h2 id="recordModalTitle">新增复盘记录</h2>
-        <form id="recordForm" class="form-grid"><input id="recordId" type="hidden" /><label>日期<input id="recordDate" type="date" required /></label><label>我的语气<select id="recordTone"><option>提高音量</option><option>不耐烦</option><option>冷处理</option><option>说了伤人的话</option><option>其他</option></select></label><label class="span-2">发生情境<input id="recordSituation" type="text" placeholder="发生了什么？" required /></label><label class="span-2">修复行动<textarea id="recordRepair" rows="3" placeholder="我准备怎么修复？" required></textarea></label><label>复核状态<select id="recordConfirmation" disabled><option>待确认</option><option>已确认</option><option>需要再沟通</option></select><small>保存或修改后由路路小皇帝重新复核。</small></label><label>备注<input id="recordNotes" type="text" placeholder="可选" /></label><div class="modal-form-actions span-2"><button class="button button-outline" data-close-modal="recordModal" type="button">取消</button><button class="button button-primary" type="submit"><i data-lucide="save" aria-hidden="true"></i>保存记录</button></div></form>
+        <p class="eyebrow">SHARED ACTION LEDGER</p><h2 id="recordModalTitle">新增行为事项</h2>
+        <form id="recordForm" class="form-grid"><input id="recordId" type="hidden" /><label>计划日期<input id="recordDate" type="date" required /></label><label>事项分类<select id="recordCategory"><option>共同约定</option><option>家务分工</option><option>关心陪伴</option><option>共同计划</option><option>习惯改善</option><option>其他</option></select></label><label class="span-2">事项内容<input id="recordTitle" type="text" maxlength="100" placeholder="例如：周六一起整理本月照片" required /></label><label class="span-2">执行说明<textarea id="recordDetails" rows="3" maxlength="500" placeholder="补充负责人、完成标准或计划步骤"></textarea></label><label>当前状态<select id="recordStatus"><option>未办</option><option>进行中</option><option>已办</option></select><small>完成的事项会计入心愿兑换进度。</small></label><label>备注<input id="recordNotes" type="text" maxlength="160" placeholder="可选" /></label><div class="modal-form-actions span-2"><button class="button button-outline" data-close-modal="recordModal" type="button">取消</button><button class="button button-primary" type="submit"><i data-lucide="save" aria-hidden="true"></i>保存事项</button></div></form>
       </div>
     </div>
 
