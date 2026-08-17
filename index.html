@@ -9,9 +9,9 @@
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Noto+Sans+SC:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
-    <link rel="stylesheet" href="styles.css?v=20260817-2" />
+    <link rel="stylesheet" href="styles.css?v=20260817-3" />
     <script src="https://unpkg.com/lucide@latest" defer></script>
-    <script type="module" src="app.js?v=20260817-2"></script>
+    <script type="module" src="app.js?v=20260817-3"></script>
   </head>
   <body>
     <div class="app-shell">
@@ -78,6 +78,12 @@
               <div class="progress-copy"><strong id="progressHeadline">还差 3 次记录</strong><span id="progressSubline">完成一次修复，就离心愿更近一点。</span></div>
               <div class="progress-track" aria-label="兑换进度"><span id="progressBar"></span></div>
               <div class="progress-meta"><span id="progressStart">本周期起点 --</span><span id="progressHint">继续加油</span></div>
+              <div class="balance-strip">
+                <div><span>累计获得</span><strong id="earnedCount">0</strong></div>
+                <div><span>已经使用</span><strong id="usedCount">0</strong></div>
+                <div class="balance-highlight"><span>当前余额</span><strong id="balanceCount">0</strong></div>
+              </div>
+              <div class="week-trend-block"><div class="week-trend-heading"><span>近 7 天记录</span><strong id="weekRecordCount">0 次</strong></div><div class="week-trend" id="weekTrend" aria-label="近七天记录趋势"></div></div>
               <div class="action-row"><button class="button button-primary" data-action="new-record" type="button"><i data-lucide="plus" aria-hidden="true"></i>新增复盘</button><button class="button button-outline" data-view-target="wishes" type="button"><i data-lucide="gift" aria-hidden="true"></i>看心愿</button></div>
             </article>
 
@@ -103,14 +109,24 @@
 
         <section class="view" id="recordsView" data-view-panel="records" hidden>
           <div class="view-heading"><div><p class="eyebrow">COMMUNICATION LOG</p><h2>沟通复盘记录</h2><p>只写事实、感受和下一步，不把记录变成新的争论。</p></div><button class="button button-primary admin-only" data-action="new-record" type="button"><i data-lucide="plus" aria-hidden="true"></i>新增记录</button></div>
-          <div class="filter-bar"><div class="filter-chip active">全部记录 <span id="recordsCount">0</span></div><div class="filter-chip">本周期 <span id="cycleRecordsCount">0</span></div><span class="filter-note">编辑需要管理员权限</span></div>
+          <div class="record-toolbar">
+            <label class="search-control"><i data-lucide="search" aria-hidden="true"></i><input id="recordSearch" type="search" placeholder="搜索情境、行动或备注" /></label>
+            <label class="select-control"><span>状态</span><select id="recordStatusFilter"><option value="all">全部状态</option><option value="待确认">待确认</option><option value="已确认">已确认</option><option value="需要再沟通">需要再沟通</option></select></label>
+            <label class="switch-control"><input id="cycleOnlyFilter" type="checkbox" /><span>仅本周期</span></label>
+            <button class="button button-outline admin-only" data-action="export-csv" type="button"><i data-lucide="file-down" aria-hidden="true"></i>导出 CSV</button>
+          </div>
+          <div class="filter-summary"><span>共 <strong id="recordResultCount">0</strong> 条结果</span><span>全部 <b id="recordsCount">0</b> · 本周期 <b id="cycleRecordsCount">0</b></span></div>
           <div class="records-table" id="recordsTable"></div>
         </section>
 
         <section class="view" id="wishesView" data-view-panel="wishes" hidden>
           <div class="view-heading"><div><p class="eyebrow">WISH EXCHANGE</p><h2>专属心愿兑换</h2><p>由她选择心愿，内容、时限和状态都可以共同调整。</p></div><button class="button button-primary admin-only" data-action="new-wish" type="button"><i data-lucide="plus" aria-hidden="true"></i>新增心愿</button></div>
-          <div class="wish-banner"><i data-lucide="heart-handshake" aria-hidden="true"></i><span>建议保留双方都会感到舒服的项目。兑换时填写日期，完成后由她确认。</span></div>
+          <div class="wish-balance-banner"><div><span>当前可兑换</span><strong><b id="wishBalanceCount">0</b> 份心愿</strong></div><p>每次兑换都会进入流水，完成后可单独确认，不会覆盖心愿清单。</p></div>
           <div class="wish-grid" id="wishGrid"></div>
+          <section class="redemption-section">
+            <div class="section-heading"><div><p class="eyebrow">REDEMPTION LOG</p><h3>兑换流水</h3></div><span id="redemptionSummary">还没有兑换记录</span></div>
+            <div class="redemption-list" id="redemptionList"></div>
+          </section>
         </section>
 
         <section class="view" id="settingsView" data-view-panel="settings" hidden>
@@ -128,7 +144,8 @@
             <article class="panel data-panel">
               <div class="panel-heading"><div><p class="eyebrow">LOCAL DATA</p><h3>数据与权限</h3></div><i data-lucide="shield-check" aria-hidden="true"></i></div>
               <div class="data-note"><strong>当前模式：浏览器本地保存</strong><span>记录不会自动上传服务器。换设备前，请先导出备份。</span></div>
-              <div class="data-actions"><button class="button button-outline admin-only" data-action="export" type="button"><i data-lucide="download" aria-hidden="true"></i>导出备份</button><button class="button button-outline admin-only" data-action="import" type="button"><i data-lucide="upload" aria-hidden="true"></i>导入备份</button><input type="file" id="importFile" accept="application/json" hidden /></div>
+              <div class="data-actions"><button class="button button-outline admin-only" data-action="export" type="button"><i data-lucide="download" aria-hidden="true"></i>导出完整备份</button><button class="button button-outline admin-only" data-action="export-csv" type="button"><i data-lucide="file-down" aria-hidden="true"></i>导出记录 CSV</button><button class="button button-outline admin-only" data-action="import" type="button"><i data-lucide="upload" aria-hidden="true"></i>导入备份</button><input type="file" id="importFile" accept="application/json" hidden /></div>
+              <div class="session-note"><i data-lucide="timer-reset" aria-hidden="true"></i><span>管理员权限在 30 分钟无操作后自动锁定。</span></div>
               <div class="divider"></div>
               <button class="text-button admin-only" data-action="change-password" type="button"><i data-lucide="key-round" aria-hidden="true"></i>修改管理员密码</button>
               <button class="text-button danger-link admin-only" data-action="logout" type="button"><i data-lucide="log-out" aria-hidden="true"></i>退出管理员模式</button>
@@ -161,7 +178,7 @@
       <div class="modal-card large-modal" role="dialog" aria-modal="true" aria-labelledby="wishModalTitle">
         <button class="modal-close" data-close-modal="wishModal" type="button" aria-label="关闭"><i data-lucide="x" aria-hidden="true"></i></button>
         <p class="eyebrow">WISH EXCHANGE</p><h2 id="wishModalTitle">新增心愿</h2>
-        <form id="wishForm" class="form-grid"><input id="wishId" type="hidden" /><label class="span-2">心愿内容<input id="wishTitle" type="text" placeholder="例如：她挑的一餐，我全程安排" required /></label><label>她的选择<select id="wishChoice"><option>待选择</option><option>本次选择</option><option>备选</option><option>暂不选择</option></select></label><label>确认状态<select id="wishStatus"><option>待选择</option><option>待完成</option><option>已完成</option><option>调整</option></select></label><label>兑换日期<input id="wishRedeemedAt" type="date" /></label><label>完成日期<input id="wishCompletedAt" type="date" /></label><div class="modal-form-actions span-2"><button class="button button-outline" data-close-modal="wishModal" type="button">取消</button><button class="button button-primary" type="submit"><i data-lucide="save" aria-hidden="true"></i>保存心愿</button></div></form>
+        <form id="wishForm" class="form-grid"><input id="wishId" type="hidden" /><label class="span-2">心愿内容<input id="wishTitle" type="text" placeholder="例如：她挑的一餐，我全程安排" required /></label><label class="span-2">补充说明<textarea id="wishDescription" rows="3" placeholder="可选：时间、方式或双方约定的边界"></textarea></label><div class="modal-form-actions span-2"><button class="button button-outline" data-close-modal="wishModal" type="button">取消</button><button class="button button-primary" type="submit"><i data-lucide="save" aria-hidden="true"></i>保存心愿</button></div></form>
       </div>
     </div>
 
