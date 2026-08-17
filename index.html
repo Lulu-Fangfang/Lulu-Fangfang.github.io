@@ -9,15 +9,15 @@
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Noto+Sans+SC:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
-    <link rel="stylesheet" href="styles.css" />
+    <link rel="stylesheet" href="styles.css?v=20260817-2" />
     <script src="https://unpkg.com/lucide@latest" defer></script>
-    <script type="module" src="app.js"></script>
+    <script type="module" src="app.js?v=20260817-2"></script>
   </head>
   <body>
     <div class="app-shell">
       <header class="topbar">
         <a class="brand" href="#overview" aria-label="回到看板">
-          <span class="brand-mark">L<span>×</span>F</span>
+          <span class="brand-mark"><span class="brand-mark-text">L<i>×</i>F</span></span>
           <span class="brand-copy">
             <span class="eyebrow">OUR LITTLE HOUSE</span>
             <strong>路路 <i>×</i> 方方</strong>
@@ -145,7 +145,7 @@
         <button class="modal-close" data-close-modal="authModal" type="button" aria-label="关闭"><i data-lucide="x" aria-hidden="true"></i></button>
         <div class="modal-icon"><i data-lucide="lock-keyhole" aria-hidden="true"></i></div>
         <p class="eyebrow">ADMIN ACCESS</p><h2 id="authTitle">进入管理员模式</h2><p class="modal-description">解锁后可以新增、修改和删除记录，也可以导入导出备份。</p>
-        <form id="authForm" class="form-stack"><label>管理员密码<input id="passwordInput" type="password" autocomplete="current-password" placeholder="输入管理员密码" required /></label><p class="form-error" id="authError" hidden>密码不正确，请重试。</p><button class="button button-primary button-full" type="submit">解锁管理权限 <i data-lucide="arrow-right" aria-hidden="true"></i></button></form>
+        <form id="authForm" class="form-stack"><label>管理员密码<input id="passwordInput" type="password" autocomplete="current-password" placeholder="输入管理员密码" required /></label><p class="form-error" id="authError" hidden>密码不正确，请重试。</p><button class="button button-primary button-full" type="submit">解锁管理权限 <i data-lucide="arrow-right" aria-hidden="true"></i></button><button class="auth-reset-button" data-action="reset-password" type="button"><i data-lucide="rotate-ccw-key" aria-hidden="true"></i><span>密码仍然无效？重置为初始密码</span></button><small class="auth-reset-note">只重置当前浏览器的管理员密码，不会删除记录。</small></form>
       </div>
     </div>
 

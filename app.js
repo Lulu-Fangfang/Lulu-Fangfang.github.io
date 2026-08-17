@@ -145,6 +145,15 @@ function renderSettings() {
   $("#agreementInput").value = data.settings.agreement;
   $("#adminStatus").textContent = isAdmin ? "管理员模式已解锁" : "访客模式";
   $("#adminStatus").classList.toggle("is-admin", isAdmin);
+  const adminButton = $("#adminButton");
+  adminButton.innerHTML = isAdmin
+    ? '<i data-lucide="shield-check" aria-hidden="true"></i><span>管理中心</span>'
+    : '<i data-lucide="lock-keyhole" aria-hidden="true"></i><span>管理员登录</span>';
+  adminButton.classList.toggle("is-admin", isAdmin);
+  adminButton.setAttribute("aria-label", isAdmin ? "管理员已解锁，进入管理中心" : "管理员登录");
+  ["#thresholdInput", "#periodStartInput", "#agreementInput"].forEach((selector) => {
+    $(selector).disabled = !isAdmin;
+  });
   $$(".admin-only").forEach((element) => {
     if (element.closest("#settingsForm") || element.matches("input, select, textarea")) element.disabled = !isAdmin;
     else if (element.matches("button")) element.disabled = false;
@@ -260,7 +269,19 @@ function unlock() {
   $("#passwordInput").value = "";
   $("#authError").hidden = true;
   render();
+  setView("settings");
   toast("管理员模式已解锁");
+}
+
+function resetLocalPassword() {
+  localStorage.removeItem(PASSWORD_HASH_KEY);
+  sessionStorage.removeItem(SESSION_KEY);
+  isAdmin = false;
+  $("#passwordInput").value = "";
+  $("#authError").hidden = true;
+  render();
+  toast("本机密码已重置，请使用初始密码登录");
+  setTimeout(() => $("#passwordInput").focus(), 30);
 }
 
 function logout() {
@@ -357,6 +378,7 @@ document.addEventListener("click", (event) => {
   if (action === "export") exportBackup();
   if (action === "import") importBackup();
   if (action === "logout") logout();
+  if (action === "reset-password" && confirm("只重置当前浏览器的管理员密码，不会删除任何记录。确定继续吗？")) resetLocalPassword();
   if (action === "change-password" && requireAdmin("修改密码")) openModal("passwordModal");
 });
 
