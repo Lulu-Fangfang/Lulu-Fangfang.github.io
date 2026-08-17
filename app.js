@@ -2,6 +2,7 @@ const STORAGE_KEY = "lulu-fangfang-house-data-v1";
 const SESSION_KEY = "lulu-fangfang-admin-session";
 const PASSWORD_HASH_KEY = "lulu-fangfang-admin-hash";
 const DEFAULT_PASSWORD_HASH = "2b018aacf75143f372f5a727cc1bec4e457622ed6ebca962a0b8899a6e514ffd";
+const DEFAULT_PASSWORD_FALLBACK_HASH = "7d534d8897d187792c5a3478882d9115";
 
 const defaultData = {
   settings: {
@@ -216,13 +217,40 @@ function toast(message) {
   setTimeout(() => item.remove(), 3200);
 }
 
-async function hashPassword(value) {
-  const buffer = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
-  return [...new Uint8Array(buffer)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+function fallbackHash(value) {
+  let a = 2166136261 >>> 0;
+  let b = 374761393 >>> 0;
+  let c = 668265263 >>> 0;
+  let d = 2246822519 >>> 0;
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    a = Math.imul(a ^ code, 16777619);
+    b = Math.imul(b ^ ((code + index) & 255), 2246822519);
+    c = Math.imul(c ^ ((code << 8) | index), 3266489917);
+    d = Math.imul(d ^ ((code * 31) + index), 668265263);
+  }
+  return [a, b, c, d].map((number) => (number >>> 0).toString(16).padStart(8, "0")).join("");
+}
+
+async function passwordRecord(value) {
+  const fallback = `fallback:${fallbackHash(value)}`;
+  if (!globalThis.crypto?.subtle) return fallback;
+  const buffer = await globalThis.crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
+  const sha256 = [...new Uint8Array(buffer)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+  return `sha256:${sha256}|${fallback}`;
 }
 
 function currentPasswordHash() {
-  return localStorage.getItem(PASSWORD_HASH_KEY) || DEFAULT_PASSWORD_HASH;
+  return localStorage.getItem(PASSWORD_HASH_KEY) || `sha256:${DEFAULT_PASSWORD_HASH}|fallback:${DEFAULT_PASSWORD_FALLBACK_HASH}`;
+}
+
+async function passwordMatches(value, stored) {
+  const fallback = `fallback:${fallbackHash(value)}`;
+  if (stored === fallback || stored.split("|").includes(fallback)) return true;
+  if (!globalThis.crypto?.subtle) return false;
+  const buffer = await globalThis.crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
+  const sha256 = [...new Uint8Array(buffer)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+  return stored === sha256 || stored === `sha256:${sha256}` || stored.split("|").includes(`sha256:${sha256}`);
 }
 
 function unlock() {
@@ -336,10 +364,17 @@ $("#adminButton").addEventListener("click", () => isAdmin ? setView("settings") 
 
 $("#authForm").addEventListener("submit", async (event) => {
   event.preventDefault();
-  const enteredHash = await hashPassword($("#passwordInput").value);
-  if (enteredHash !== currentPasswordHash()) {
+  try {
+    const matches = await passwordMatches($("#passwordInput").value, currentPasswordHash());
+    if (!matches) {
+      $("#authError").textContent = "密码不正确，请重试。";
+      $("#authError").hidden = false;
+      $("#passwordInput").select();
+      return;
+    }
+  } catch {
+    $("#authError").textContent = "当前浏览器无法完成密码校验，请改用 HTTPS 或本地服务器打开。";
     $("#authError").hidden = false;
-    $("#passwordInput").select();
     return;
   }
   unlock();
@@ -379,11 +414,10 @@ $("#settingsForm").addEventListener("submit", (event) => {
 $("#passwordForm").addEventListener("submit", async (event) => {
   event.preventDefault();
   const error = $("#passwordError");
-  const current = await hashPassword($("#currentPassword").value);
-  if (current !== currentPasswordHash()) { error.textContent = "当前密码不正确。"; error.hidden = false; return; }
+  if (!(await passwordMatches($("#currentPassword").value, currentPasswordHash()))) { error.textContent = "当前密码不正确。"; error.hidden = false; return; }
   if ($("#newPassword").value.length < 8) { error.textContent = "新密码至少需要 8 位。"; error.hidden = false; return; }
   if ($("#newPassword").value !== $("#confirmPassword").value) { error.textContent = "两次输入的新密码不一致。"; error.hidden = false; return; }
-  localStorage.setItem(PASSWORD_HASH_KEY, await hashPassword($("#newPassword").value));
+  localStorage.setItem(PASSWORD_HASH_KEY, await passwordRecord($("#newPassword").value));
   $("#passwordForm").reset(); error.hidden = true; closeModal("passwordModal"); toast("管理员密码已更新");
 });
 
