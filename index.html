@@ -1,0 +1,178 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#f7f3eb" />
+    <meta name="description" content="露露与方方的沟通复盘、心愿兑换和共同生活记录。" />
+    <title>露露 × 方方 | 我们的小站</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Noto+Sans+SC:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="styles.css" />
+    <script src="https://unpkg.com/lucide@latest" defer></script>
+    <script type="module" src="app.js"></script>
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="topbar">
+        <a class="brand" href="#overview" aria-label="回到看板">
+          <span class="brand-mark">L<span>×</span>F</span>
+          <span class="brand-copy">
+            <span class="eyebrow">OUR LITTLE HOUSE</span>
+            <strong>露露 <i>×</i> 方方</strong>
+          </span>
+        </a>
+        <div class="top-actions">
+          <div class="privacy-pill"><span class="status-dot"></span><span id="privacyText">本地私密模式</span></div>
+          <button class="button button-quiet" id="adminButton" type="button">
+            <i data-lucide="lock-keyhole" aria-hidden="true"></i><span>管理员登录</span>
+          </button>
+        </div>
+      </header>
+
+      <main class="page-shell">
+        <section class="welcome-strip">
+          <div class="welcome-copy">
+            <p class="eyebrow">A SMALL PLACE FOR TWO</p>
+            <h1>把每一次修复，<br /><em>都变成下一次靠近。</em></h1>
+            <p class="welcome-description">记录语气、行动和心愿，给生活留一点被认真对待的证据。</p>
+          </div>
+          <div class="today-card">
+            <span class="today-label">TODAY</span>
+            <strong id="todayLabel">--</strong>
+            <span id="todayNote">一起把话说好</span>
+          </div>
+        </section>
+
+        <nav class="tab-nav" aria-label="主要页面">
+          <button class="tab-button is-active" data-view="overview" type="button"><i data-lucide="layout-dashboard" aria-hidden="true"></i><span>看板</span></button>
+          <button class="tab-button" data-view="records" type="button"><i data-lucide="notebook-pen" aria-hidden="true"></i><span>复盘记录</span></button>
+          <button class="tab-button" data-view="wishes" type="button"><i data-lucide="sparkles" aria-hidden="true"></i><span>心愿兑换</span></button>
+          <button class="tab-button" data-view="settings" type="button"><i data-lucide="sliders-horizontal" aria-hidden="true"></i><span>设置</span></button>
+        </nav>
+
+        <section class="view is-visible" id="overviewView" data-view-panel="overview">
+          <div class="stats-grid">
+            <article class="stat-card stat-card-dark">
+              <div class="stat-icon"><i data-lucide="message-circle-heart" aria-hidden="true"></i></div>
+              <div><span>本周期记录</span><strong id="statRecords">0</strong><small id="statPeriod">从本周期开始计算</small></div>
+            </article>
+            <article class="stat-card stat-card-mint">
+              <div class="stat-icon"><i data-lucide="ticket-check" aria-hidden="true"></i></div>
+              <div><span>可兑换心愿</span><strong id="statAvailable">0</strong><small id="statThreshold">每 3 次记录兑换 1 份</small></div>
+            </article>
+            <article class="stat-card stat-card-coral">
+              <div class="stat-icon"><i data-lucide="hand-heart" aria-hidden="true"></i></div>
+              <div><span>待确认记录</span><strong id="statPending">0</strong><small>需要再沟通也可以标记</small></div>
+            </article>
+            <article class="stat-card stat-card-cream">
+              <div class="stat-icon"><i data-lucide="check-check" aria-hidden="true"></i></div>
+              <div><span>已完成心愿</span><strong id="statCompleted">0</strong><small>把承诺落到日常里</small></div>
+            </article>
+          </div>
+
+          <div class="dashboard-grid">
+            <article class="panel progress-panel">
+              <div class="panel-heading"><div><p class="eyebrow">NEXT LITTLE THING</p><h2>下一份心愿</h2></div><span class="panel-kicker" id="progressKicker">0 / 3</span></div>
+              <div class="progress-copy"><strong id="progressHeadline">还差 3 次记录</strong><span id="progressSubline">完成一次修复，就离心愿更近一点。</span></div>
+              <div class="progress-track" aria-label="兑换进度"><span id="progressBar"></span></div>
+              <div class="progress-meta"><span id="progressStart">本周期起点 --</span><span id="progressHint">继续加油</span></div>
+              <div class="action-row"><button class="button button-primary" data-action="new-record" type="button"><i data-lucide="plus" aria-hidden="true"></i>新增复盘</button><button class="button button-outline" data-view-target="wishes" type="button"><i data-lucide="gift" aria-hidden="true"></i>看心愿</button></div>
+            </article>
+
+            <article class="panel activity-panel">
+              <div class="panel-heading"><div><p class="eyebrow">RECENT NOTES</p><h2>最近的记录</h2></div><button class="text-button" data-view-target="records" type="button">查看全部 <i data-lucide="arrow-up-right" aria-hidden="true"></i></button></div>
+              <div id="recentRecords" class="activity-list"></div>
+            </article>
+          </div>
+
+          <div class="dashboard-grid dashboard-grid-bottom">
+            <article class="panel wish-preview-panel">
+              <div class="panel-heading"><div><p class="eyebrow">WISH LIST</p><h2>心愿清单</h2></div><button class="text-button" data-view-target="wishes" type="button">打开清单 <i data-lucide="arrow-up-right" aria-hidden="true"></i></button></div>
+              <div id="wishPreview" class="wish-preview-list"></div>
+            </article>
+            <article class="panel note-panel">
+              <div class="note-mark"><i data-lucide="quote" aria-hidden="true"></i></div>
+              <p class="eyebrow">OUR AGREEMENT</p>
+              <blockquote id="agreementNote">先修复，再兑换。双方都舒服的时候，心愿才算真正兑现。</blockquote>
+              <div class="note-signature"><span></span><small>露露 & 方方共同确认</small></div>
+            </article>
+          </div>
+        </section>
+
+        <section class="view" id="recordsView" data-view-panel="records" hidden>
+          <div class="view-heading"><div><p class="eyebrow">COMMUNICATION LOG</p><h2>沟通复盘记录</h2><p>只写事实、感受和下一步，不把记录变成新的争论。</p></div><button class="button button-primary admin-only" data-action="new-record" type="button"><i data-lucide="plus" aria-hidden="true"></i>新增记录</button></div>
+          <div class="filter-bar"><div class="filter-chip active">全部记录 <span id="recordsCount">0</span></div><div class="filter-chip">本周期 <span id="cycleRecordsCount">0</span></div><span class="filter-note">编辑需要管理员权限</span></div>
+          <div class="records-table" id="recordsTable"></div>
+        </section>
+
+        <section class="view" id="wishesView" data-view-panel="wishes" hidden>
+          <div class="view-heading"><div><p class="eyebrow">WISH EXCHANGE</p><h2>专属心愿兑换</h2><p>由她选择心愿，内容、时限和状态都可以共同调整。</p></div><button class="button button-primary admin-only" data-action="new-wish" type="button"><i data-lucide="plus" aria-hidden="true"></i>新增心愿</button></div>
+          <div class="wish-banner"><i data-lucide="heart-handshake" aria-hidden="true"></i><span>建议保留双方都会感到舒服的项目。兑换时填写日期，完成后由她确认。</span></div>
+          <div class="wish-grid" id="wishGrid"></div>
+        </section>
+
+        <section class="view" id="settingsView" data-view-panel="settings" hidden>
+          <div class="view-heading"><div><p class="eyebrow">HOUSE RULES</p><h2>规则与数据</h2><p>黄色字段可以修改，双方确认后再开始一个新周期。</p></div><span class="admin-status" id="adminStatus">访客模式</span></div>
+          <div class="settings-grid">
+            <article class="panel settings-panel">
+              <div class="panel-heading"><div><p class="eyebrow">EDITABLE RULES</p><h3>兑换规则</h3></div><i data-lucide="sliders-horizontal" aria-hidden="true"></i></div>
+              <form id="settingsForm" class="form-stack">
+                <label>每多少次记录兑换 1 份心愿<input id="thresholdInput" name="threshold" type="number" min="1" max="99" required disabled /></label>
+                <label>本周期开始日期<input id="periodStartInput" name="periodStart" type="date" required disabled /></label>
+                <label>共同约定<textarea id="agreementInput" name="agreement" rows="4" required disabled></textarea></label>
+                <button class="button button-primary admin-only" type="submit" disabled><i data-lucide="save" aria-hidden="true"></i>保存规则</button>
+              </form>
+            </article>
+            <article class="panel data-panel">
+              <div class="panel-heading"><div><p class="eyebrow">LOCAL DATA</p><h3>数据与权限</h3></div><i data-lucide="shield-check" aria-hidden="true"></i></div>
+              <div class="data-note"><strong>当前模式：浏览器本地保存</strong><span>记录不会自动上传服务器。换设备前，请先导出备份。</span></div>
+              <div class="data-actions"><button class="button button-outline admin-only" data-action="export" type="button"><i data-lucide="download" aria-hidden="true"></i>导出备份</button><button class="button button-outline admin-only" data-action="import" type="button"><i data-lucide="upload" aria-hidden="true"></i>导入备份</button><input type="file" id="importFile" accept="application/json" hidden /></div>
+              <div class="divider"></div>
+              <button class="text-button admin-only" data-action="change-password" type="button"><i data-lucide="key-round" aria-hidden="true"></i>修改管理员密码</button>
+              <button class="text-button danger-link admin-only" data-action="logout" type="button"><i data-lucide="log-out" aria-hidden="true"></i>退出管理员模式</button>
+            </article>
+          </div>
+        </section>
+
+        <footer class="site-footer"><span>Made for two, with intention.</span><span>数据保存在此浏览器</span></footer>
+      </main>
+    </div>
+
+    <div class="modal-backdrop" id="authModal" hidden>
+      <div class="modal-card auth-card" role="dialog" aria-modal="true" aria-labelledby="authTitle">
+        <button class="modal-close" data-close-modal="authModal" type="button" aria-label="关闭"><i data-lucide="x" aria-hidden="true"></i></button>
+        <div class="modal-icon"><i data-lucide="lock-keyhole" aria-hidden="true"></i></div>
+        <p class="eyebrow">ADMIN ACCESS</p><h2 id="authTitle">进入管理员模式</h2><p class="modal-description">解锁后可以新增、修改和删除记录，也可以导入导出备份。</p>
+        <form id="authForm" class="form-stack"><label>管理员密码<input id="passwordInput" type="password" autocomplete="current-password" placeholder="输入管理员密码" required /></label><p class="form-error" id="authError" hidden>密码不正确，请重试。</p><button class="button button-primary button-full" type="submit">解锁管理权限 <i data-lucide="arrow-right" aria-hidden="true"></i></button></form>
+      </div>
+    </div>
+
+    <div class="modal-backdrop" id="recordModal" hidden>
+      <div class="modal-card large-modal" role="dialog" aria-modal="true" aria-labelledby="recordModalTitle">
+        <button class="modal-close" data-close-modal="recordModal" type="button" aria-label="关闭"><i data-lucide="x" aria-hidden="true"></i></button>
+        <p class="eyebrow">COMMUNICATION LOG</p><h2 id="recordModalTitle">新增复盘记录</h2>
+        <form id="recordForm" class="form-grid"><input id="recordId" type="hidden" /><label>日期<input id="recordDate" type="date" required /></label><label>我的语气<select id="recordTone"><option>提高音量</option><option>不耐烦</option><option>冷处理</option><option>说了伤人的话</option><option>其他</option></select></label><label class="span-2">发生情境<input id="recordSituation" type="text" placeholder="发生了什么？" required /></label><label class="span-2">修复行动<textarea id="recordRepair" rows="3" placeholder="我准备怎么修复？" required></textarea></label><label>她的确认<select id="recordConfirmation"><option>待确认</option><option>已确认</option><option>需要再沟通</option></select></label><label>备注<input id="recordNotes" type="text" placeholder="可选" /></label><div class="modal-form-actions span-2"><button class="button button-outline" data-close-modal="recordModal" type="button">取消</button><button class="button button-primary" type="submit"><i data-lucide="save" aria-hidden="true"></i>保存记录</button></div></form>
+      </div>
+    </div>
+
+    <div class="modal-backdrop" id="wishModal" hidden>
+      <div class="modal-card large-modal" role="dialog" aria-modal="true" aria-labelledby="wishModalTitle">
+        <button class="modal-close" data-close-modal="wishModal" type="button" aria-label="关闭"><i data-lucide="x" aria-hidden="true"></i></button>
+        <p class="eyebrow">WISH EXCHANGE</p><h2 id="wishModalTitle">新增心愿</h2>
+        <form id="wishForm" class="form-grid"><input id="wishId" type="hidden" /><label class="span-2">心愿内容<input id="wishTitle" type="text" placeholder="例如：她挑的一餐，我全程安排" required /></label><label>她的选择<select id="wishChoice"><option>待选择</option><option>本次选择</option><option>备选</option><option>暂不选择</option></select></label><label>确认状态<select id="wishStatus"><option>待选择</option><option>待完成</option><option>已完成</option><option>调整</option></select></label><label>兑换日期<input id="wishRedeemedAt" type="date" /></label><label>完成日期<input id="wishCompletedAt" type="date" /></label><div class="modal-form-actions span-2"><button class="button button-outline" data-close-modal="wishModal" type="button">取消</button><button class="button button-primary" type="submit"><i data-lucide="save" aria-hidden="true"></i>保存心愿</button></div></form>
+      </div>
+    </div>
+
+    <div class="modal-backdrop" id="passwordModal" hidden>
+      <div class="modal-card auth-card" role="dialog" aria-modal="true" aria-labelledby="passwordModalTitle">
+        <button class="modal-close" data-close-modal="passwordModal" type="button" aria-label="关闭"><i data-lucide="x" aria-hidden="true"></i></button>
+        <div class="modal-icon"><i data-lucide="key-round" aria-hidden="true"></i></div><p class="eyebrow">SECURITY</p><h2 id="passwordModalTitle">修改管理员密码</h2><p class="modal-description">新密码只保存在当前浏览器。请同时记在安全的地方。</p>
+        <form id="passwordForm" class="form-stack"><label>当前密码<input id="currentPassword" type="password" required /></label><label>新密码<input id="newPassword" type="password" minlength="8" required /></label><label>再次输入新密码<input id="confirmPassword" type="password" minlength="8" required /></label><p class="form-error" id="passwordError" hidden></p><button class="button button-primary button-full" type="submit">保存新密码 <i data-lucide="check" aria-hidden="true"></i></button></form>
+      </div>
+    </div>
+
+    <div class="toast-region" id="toastRegion" aria-live="polite"></div>
+  </body>
+</html>
