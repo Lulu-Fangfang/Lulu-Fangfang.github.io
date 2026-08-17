@@ -1,10 +1,14 @@
 const STORAGE_KEY = "lulu-fangfang-house-data-v1";
-const SESSION_KEY = "lulu-fangfang-admin-session";
-const PASSWORD_HASH_KEY = "lulu-fangfang-admin-hash";
-const DATA_VERSION = 2;
+const PASSWORD_HASH_KEYS = {
+  recorder: "lulu-fangfang-password-recorder",
+  reviewer: "lulu-fangfang-password-reviewer",
+};
+const DATA_VERSION = 3;
 const SESSION_TIMEOUT_MS = 30 * 60 * 1000;
-const DEFAULT_PASSWORD_HASH = "2b018aacf75143f372f5a727cc1bec4e457622ed6ebca962a0b8899a6e514ffd";
-const DEFAULT_PASSWORD_FALLBACK_HASH = "7d534d8897d187792c5a3478882d9115";
+const DEFAULT_PASSWORD_HASHES = {
+  recorder: { sha256: "9a0dd7ba868524e126086edda337dac92c8b4363a115edc709e8b3523a95a696", fallback: "5d45f3cfd18d6d87198fb2e795e11db1" },
+  reviewer: { sha256: "d1228b0c90170b196f6955986a61382313cf9f1f4c6cd919177eea6e772ea9bc", fallback: "06607d4fd0331b79024198e717d3c5af" },
+};
 
 const defaultData = {
   version: DATA_VERSION,
@@ -22,12 +26,21 @@ const defaultData = {
     { id: "wish-5", title: "她自定义一份心愿", description: "双方确认内容后再登记兑换。" },
   ],
   redemptions: [],
+  moments: [],
+  tasks: [],
+  issues: [],
 };
 
 let data = loadData();
-let isAdmin = restoreAdminSession();
+let currentRole = null;
+let isAdmin = false;
+let lastAdminActivity = 0;
 let activeView = location.hash.replace("#", "") || "overview";
 const recordFilters = { query: "", status: "all", cycleOnly: false };
+let pendingMomentImages = [];
+let editingMomentImageIds = [];
+let originalMomentImageIds = [];
+const imageCache = new Map();
 
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => [...document.querySelectorAll(selector)];
@@ -58,9 +71,12 @@ function normalizeData(saved) {
   return {
     version: DATA_VERSION,
     settings: { ...defaultData.settings, ...(saved.settings || {}) },
-    records: Array.isArray(saved.records) ? saved.records : [],
+    records: Array.isArray(saved.records) ? saved.records.map((record) => ({ confirmation: "待确认", notes: "", ...record })) : [],
     wishes,
     redemptions: migratedRedemptions,
+    moments: Array.isArray(saved.moments) ? saved.moments.map((moment) => ({ imageIds: [], reviewStatus: "待复核", reviewedAt: "", ...moment })) : [],
+    tasks: Array.isArray(saved.tasks) ? saved.tasks.map((task) => ({ ...task, done: Boolean(task.done), reviewed: Boolean(task.reviewed), reviewedAt: task.reviewedAt || "", createdAt: task.createdAt || `${task.date || "1970-01-01"}T00:00:00.000Z` })) : [],
+    issues: Array.isArray(saved.issues) ? saved.issues.map((issue) => ({ status: "待沟通", reviewedAt: "", proposal: "", ...issue })) : [],
   };
 }
 
@@ -80,24 +96,98 @@ function saveData() {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
 }
 
-function restoreAdminSession() {
-  const saved = sessionStorage.getItem(SESSION_KEY);
-  if (!saved) return false;
-  if (saved === "1") {
-    sessionStorage.setItem(SESSION_KEY, String(Date.now()));
-    return true;
+const MEDIA_DB_NAME = "lulu-fangfang-media-v1";
+const MEDIA_STORE_NAME = "images";
+
+function openMediaDb() {
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open(MEDIA_DB_NAME, 1);
+    request.onupgradeneeded = () => {
+      if (!request.result.objectStoreNames.contains(MEDIA_STORE_NAME)) request.result.createObjectStore(MEDIA_STORE_NAME, { keyPath: "id" });
+    };
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+}
+
+async function mediaTransaction(mode, handler) {
+  const db = await openMediaDb();
+  return new Promise((resolve, reject) => {
+    const transaction = db.transaction(MEDIA_STORE_NAME, mode);
+    const store = transaction.objectStore(MEDIA_STORE_NAME);
+    const result = handler(store);
+    transaction.oncomplete = () => { db.close(); resolve(result); };
+    transaction.onerror = () => { db.close(); reject(transaction.error); };
+  });
+}
+
+async function putMedia(item) {
+  await mediaTransaction("readwrite", (store) => store.put(item));
+  imageCache.set(item.id, item);
+}
+
+async function deleteMedia(id) {
+  await mediaTransaction("readwrite", (store) => store.delete(id));
+  imageCache.delete(id);
+}
+
+async function clearAllMedia() {
+  await mediaTransaction("readwrite", (store) => store.clear());
+  imageCache.clear();
+}
+
+async function getAllMedia() {
+  const db = await openMediaDb();
+  return new Promise((resolve, reject) => {
+    const transaction = db.transaction(MEDIA_STORE_NAME, "readonly");
+    const request = transaction.objectStore(MEDIA_STORE_NAME).getAll();
+    request.onsuccess = () => { db.close(); resolve(request.result || []); };
+    request.onerror = () => { db.close(); reject(request.error); };
+  });
+}
+
+async function hydrateMediaCache() {
+  try {
+    const items = await getAllMedia();
+    imageCache.clear();
+    items.forEach((item) => imageCache.set(item.id, item));
+  } catch {
+    toast("当前浏览器无法打开本地图片库");
   }
-  const lastActive = Number(saved);
-  if (!Number.isFinite(lastActive) || Date.now() - lastActive > SESSION_TIMEOUT_MS) {
-    sessionStorage.removeItem(SESSION_KEY);
-    return false;
-  }
-  return true;
+}
+
+function fileAsDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(file);
+  });
+}
+
+async function compressImage(file) {
+  const source = await fileAsDataUrl(file);
+  const image = await new Promise((resolve, reject) => {
+    const element = new Image();
+    element.onload = () => resolve(element);
+    element.onerror = reject;
+    element.src = source;
+  });
+  const maxSide = 1600;
+  const scale = Math.min(1, maxSide / Math.max(image.naturalWidth, image.naturalHeight));
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.max(1, Math.round(image.naturalWidth * scale));
+  canvas.height = Math.max(1, Math.round(image.naturalHeight * scale));
+  canvas.getContext("2d").drawImage(image, 0, 0, canvas.width, canvas.height);
+  return canvas.toDataURL("image/webp", 0.82);
 }
 
 function touchAdminSession() {
-  if (isAdmin) sessionStorage.setItem(SESSION_KEY, String(Date.now()));
+  if (isAdmin) lastAdminActivity = Date.now();
 }
+
+const isRecorder = () => currentRole === "recorder";
+const isReviewer = () => currentRole === "reviewer";
 
 function escapeHtml(value = "") {
   return String(value).replace(/[&<>'"]/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" }[char]));
@@ -140,8 +230,8 @@ function metrics() {
 }
 
 function statusClass(status) {
-  if (status === "已确认" || status === "已完成") return "confirmed";
-  if (status === "需要再沟通" || status === "调整") return "needs";
+  if (["已确认", "已完成", "已复核", "已解决"].includes(status)) return "confirmed";
+  if (["需要再沟通", "调整", "待沟通"].includes(status)) return "needs";
   return "";
 }
 
@@ -190,10 +280,51 @@ function renderRecentRecords() {
   const target = $("#recentRecords");
   const recent = [...data.records].sort((a, b) => b.date.localeCompare(a.date)).slice(0, 4);
   if (!recent.length) {
-    target.innerHTML = `<div class="empty-state"><i data-lucide="notebook-pen"></i><strong>还没有复盘记录</strong><span>解锁管理员模式后，从这里开始新增。</span></div>`;
+    target.innerHTML = `<div class="empty-state"><i data-lucide="notebook-pen"></i><strong>还没有复盘记录</strong><span>方方登录后，可以从这里开始记录。</span></div>`;
     return;
   }
   target.innerHTML = recent.map((record) => `<div class="activity-item"><div class="activity-date">${formatDate(record.date, true).replace("/", "<br />")}</div><div><strong>${escapeHtml(record.situation)}</strong><small>${escapeHtml(record.repair)}</small></div><span class="status-label ${statusClass(record.confirmation)}">${escapeHtml(record.confirmation)}</span></div>`).join("");
+}
+
+function renderMoments() {
+  const target = $("#momentsGrid");
+  const sorted = [...data.moments].sort((a, b) => `${b.date}-${b.id}`.localeCompare(`${a.date}-${a.id}`));
+  if (!sorted.length) {
+    target.innerHTML = `<div class="empty-state module-empty"><i data-lucide="images"></i><strong>还没有美好记录</strong><span>方方登录后，可以写下第一件值得记住的小事。</span></div>`;
+    return;
+  }
+  target.innerHTML = sorted.map((moment) => {
+    const images = (moment.imageIds || []).map((id) => imageCache.get(id)).filter(Boolean);
+    const imageMarkup = images.length ? `<div class="moment-photo-grid count-${Math.min(images.length, 4)}">${images.map((image) => `<img src="${image.dataUrl}" alt="${escapeHtml(moment.title)}的照片" loading="lazy" />`).join("")}</div>` : `<div class="moment-no-photo"><i data-lucide="sun-medium"></i><span>${formatDate(moment.date, true)}</span></div>`;
+    return `<article class="moment-card">${imageMarkup}<div class="moment-content"><div class="moment-meta"><span>${formatDate(moment.date)}</span><span class="status-label ${statusClass(moment.reviewStatus)}">${escapeHtml(moment.reviewStatus || "待复核")}</span></div><h3>${escapeHtml(moment.title)}</h3>${moment.note ? `<p>${escapeHtml(moment.note)}</p>` : ""}<div class="moment-actions">${isReviewer() && moment.reviewStatus !== "已复核" ? `<button class="button button-outline" data-action="review-moment" data-id="${moment.id}" type="button"><i data-lucide="badge-check"></i>确认复核</button>` : ""}${isRecorder() ? `<div class="row-actions"><button class="icon-button" data-action="edit-moment" data-id="${moment.id}" title="编辑美好记录"><i data-lucide="pencil"></i></button><button class="icon-button danger" data-action="delete-moment" data-id="${moment.id}" title="删除美好记录"><i data-lucide="trash-2"></i></button></div>` : ""}</div></div></article>`;
+  }).join("");
+}
+
+function renderTasks() {
+  const selectedDate = $("#taskDateFilter").value || today();
+  const tasks = data.tasks.filter((task) => task.date === selectedDate).sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt)));
+  const completed = tasks.filter((task) => task.done).length;
+  const reviewed = tasks.filter((task) => task.reviewed).length;
+  $("#taskProgressText").textContent = tasks.length ? `${completed}/${tasks.length} 已完成 · ${reviewed} 项已复核` : "这一天还没有任务";
+  $("#taskProgressBar").style.width = `${tasks.length ? (completed / tasks.length) * 100 : 0}%`;
+  const target = $("#taskList");
+  if (!tasks.length) {
+    target.innerHTML = `<div class="empty-state compact-empty"><i data-lucide="list-todo"></i><strong>清单还是空的</strong><span>方方可以添加当天要做的事情。</span></div>`;
+    return;
+  }
+  target.innerHTML = tasks.map((task) => `<div class="task-row ${task.done ? "is-done" : ""} ${task.reviewed ? "is-reviewed" : ""}"><button class="task-check" data-action="toggle-task" data-id="${task.id}" type="button" ${!isRecorder() ? "disabled" : ""} aria-label="${task.done ? "标记为未完成" : "标记为已完成"}"><i data-lucide="${task.done ? "check" : "circle"}"></i></button><div class="task-main"><strong>${escapeHtml(task.title)}</strong><small>${task.reviewed ? `路路小皇帝已复核 · ${formatDate(task.reviewedAt)}` : task.done ? "等待路路小皇帝复核" : "等待方方完成"}</small></div><span class="status-label ${task.reviewed ? "confirmed" : ""}">${task.reviewed ? "已复核" : task.done ? "待复核" : "待完成"}</span><div class="task-actions">${isReviewer() && task.done && !task.reviewed ? `<button class="button button-outline" data-action="review-task" data-id="${task.id}" type="button"><i data-lucide="badge-check"></i>复核</button>` : ""}${isRecorder() ? `<button class="icon-button danger" data-action="delete-task" data-id="${task.id}" title="删除任务"><i data-lucide="trash-2"></i></button>` : ""}</div></div>`).join("");
+}
+
+function renderIssues() {
+  const target = $("#issueGrid");
+  const sorted = [...data.issues].sort((a, b) => `${b.date}-${b.id}`.localeCompare(`${a.date}-${a.id}`));
+  const counts = { open: sorted.filter((item) => item.status !== "已解决").length, talking: sorted.filter((item) => item.status === "沟通中").length, solved: sorted.filter((item) => item.status === "已解决").length };
+  $("#issueSummary").innerHTML = `<div><span>待处理</span><strong>${counts.open}</strong></div><div><span>沟通中</span><strong>${counts.talking}</strong></div><div><span>已解决</span><strong>${counts.solved}</strong></div>`;
+  if (!sorted.length) {
+    target.innerHTML = `<div class="empty-state module-empty"><i data-lucide="messages-square"></i><strong>目前没有问题记录</strong><span>有需要沟通的事情时，先把事实和期望写清楚。</span></div>`;
+    return;
+  }
+  target.innerHTML = sorted.map((issue) => `<article class="issue-card ${issue.status === "已解决" ? "is-solved" : ""}"><div class="issue-card-head"><div><span>${formatDate(issue.date)}</span><h3>${escapeHtml(issue.title)}</h3></div><span class="status-label ${statusClass(issue.status)}">${escapeHtml(issue.status)}</span></div><div class="issue-block"><small>问题与感受</small><p>${escapeHtml(issue.description)}</p></div>${issue.proposal ? `<div class="issue-block proposal"><small>建议的下一步</small><p>${escapeHtml(issue.proposal)}</p></div>` : ""}<div class="issue-actions">${isReviewer() && issue.status === "待沟通" ? `<button class="button button-outline" data-action="update-issue" data-status="沟通中" data-id="${issue.id}"><i data-lucide="messages-square"></i>开始沟通</button>` : ""}${isReviewer() && issue.status !== "已解决" ? `<button class="button button-primary" data-action="update-issue" data-status="已解决" data-id="${issue.id}"><i data-lucide="badge-check"></i>确认解决</button>` : ""}${isRecorder() ? `<div class="row-actions"><button class="icon-button" data-action="edit-issue" data-id="${issue.id}" title="编辑问题"><i data-lucide="pencil"></i></button><button class="icon-button danger" data-action="delete-issue" data-id="${issue.id}" title="删除问题"><i data-lucide="trash-2"></i></button></div>` : ""}</div></article>`).join("");
 }
 
 function renderWishPreview() {
@@ -202,6 +333,12 @@ function renderWishPreview() {
     const count = data.redemptions.filter((item) => item.wishId === wish.id).length;
     return `<div class="wish-preview-item"><span class="wish-bullet"><i data-lucide="sparkles"></i></span><strong>${escapeHtml(wish.title)}</strong><small>${count ? `已兑换 ${count} 次` : "等待选择"}</small></div>`;
   }).join("");
+}
+
+function recordActions(record) {
+  if (isRecorder()) return `<div class="row-actions"><button class="icon-button" data-action="edit-record" data-id="${record.id}" title="编辑行为日志"><i data-lucide="pencil"></i></button><button class="icon-button danger" data-action="delete-record" data-id="${record.id}" title="删除行为日志"><i data-lucide="trash-2"></i></button></div>`;
+  if (isReviewer()) return `<div class="row-actions review-actions"><button class="icon-button" data-action="confirm-record" data-status="已确认" data-id="${record.id}" title="确认复核"><i data-lucide="badge-check"></i></button><button class="icon-button danger" data-action="confirm-record" data-status="需要再沟通" data-id="${record.id}" title="需要再沟通"><i data-lucide="message-circle-warning"></i></button></div>`;
+  return `<span class="status-label">只读</span>`;
 }
 
 function renderRecords() {
@@ -219,7 +356,7 @@ function renderRecords() {
     return;
   }
   const header = `<div class="record-row record-header"><div class="record-cell">日期</div><div class="record-cell">发生情境</div><div class="record-cell">我的语气</div><div class="record-cell">修复行动</div><div class="record-cell">她的确认</div><div class="record-cell">操作</div></div>`;
-  const rows = filtered.map((record) => `<div class="record-row"><div class="record-cell record-date" data-label="日期">${formatDate(record.date)}</div><div class="record-cell situation" data-label="情境"><strong>${escapeHtml(record.situation)}</strong><small>${escapeHtml(record.notes || "")}</small></div><div class="record-cell" data-label="语气"><span class="status-label">${escapeHtml(record.tone)}</span></div><div class="record-cell repair" data-label="修复行动"><small>${escapeHtml(record.repair)}</small></div><div class="record-cell" data-label="确认"><span class="status-label ${statusClass(record.confirmation)}">${escapeHtml(record.confirmation)}</span></div><div class="record-cell action-cell" data-label="操作">${isAdmin ? `<div class="row-actions"><button class="icon-button" data-action="edit-record" data-id="${record.id}" title="编辑记录"><i data-lucide="pencil"></i></button><button class="icon-button danger" data-action="delete-record" data-id="${record.id}" title="删除记录"><i data-lucide="trash-2"></i></button></div>` : `<span class="status-label">只读</span>`}</div></div>`).join("");
+  const rows = filtered.map((record) => `<div class="record-row"><div class="record-cell record-date" data-label="日期">${formatDate(record.date)}</div><div class="record-cell situation" data-label="情境"><strong>${escapeHtml(record.situation)}</strong><small>${escapeHtml(record.notes || "")}</small></div><div class="record-cell" data-label="语气"><span class="status-label">${escapeHtml(record.tone)}</span></div><div class="record-cell repair" data-label="修复行动"><small>${escapeHtml(record.repair)}</small></div><div class="record-cell" data-label="确认"><span class="status-label ${statusClass(record.confirmation)}">${escapeHtml(record.confirmation)}</span></div><div class="record-cell action-cell" data-label="操作">${recordActions(record)}</div></div>`).join("");
   target.innerHTML = header + rows;
 }
 
@@ -229,7 +366,7 @@ function renderWishes() {
   target.innerHTML = data.wishes.map((wish, index) => {
     const related = data.redemptions.filter((item) => item.wishId === wish.id).sort((a, b) => b.redeemedAt.localeCompare(a.redeemedAt));
     const latest = related[0];
-    return `<article class="wish-card ${latest?.status === "已完成" ? "is-done" : ""}"><div class="wish-card-top"><span class="wish-number">${String(index + 1).padStart(2, "0")}</span><span class="status-label ${latest ? statusClass(latest.status) : ""}">${related.length ? `兑换 ${related.length} 次` : "可选心愿"}</span></div><h3>${escapeHtml(wish.title)}</h3>${wish.description ? `<p class="wish-card-description">${escapeHtml(wish.description)}</p>` : ""}<div class="wish-card-meta">${latest ? `<span><i data-lucide="calendar-days"></i>最近兑换：${formatDate(latest.redeemedAt)}</span><span><i data-lucide="${latest.status === "已完成" ? "check" : "clock-3"}"></i>${escapeHtml(latest.status)}</span>` : `<span><i data-lucide="circle-dashed"></i>还没有兑换记录</span>`}</div><div class="wish-card-actions"><button class="button button-primary wish-redeem-button" data-action="redeem-wish" data-id="${wish.id}" type="button" ${isAdmin && m.available < 1 ? "disabled" : ""}><i data-lucide="ticket-check"></i>${isAdmin ? "兑换" : "登录兑换"}</button>${isAdmin ? `<div class="row-actions"><button class="icon-button" data-action="edit-wish" data-id="${wish.id}" title="编辑心愿"><i data-lucide="pencil"></i></button><button class="icon-button danger" data-action="delete-wish" data-id="${wish.id}" title="删除心愿"><i data-lucide="trash-2"></i></button></div>` : ""}</div></article>`;
+    return `<article class="wish-card ${latest?.status === "已完成" ? "is-done" : ""}"><div class="wish-card-top"><span class="wish-number">${String(index + 1).padStart(2, "0")}</span><span class="status-label ${latest ? statusClass(latest.status) : ""}">${related.length ? `兑换 ${related.length} 次` : "可选心愿"}</span></div><h3>${escapeHtml(wish.title)}</h3>${wish.description ? `<p class="wish-card-description">${escapeHtml(wish.description)}</p>` : ""}<div class="wish-card-meta">${latest ? `<span><i data-lucide="calendar-days"></i>最近兑换：${formatDate(latest.redeemedAt)}</span><span><i data-lucide="${latest.status === "已完成" ? "check" : "clock-3"}"></i>${escapeHtml(latest.status)}</span>` : `<span><i data-lucide="circle-dashed"></i>还没有兑换记录</span>`}</div><div class="wish-card-actions"><button class="button button-primary wish-redeem-button" data-action="redeem-wish" data-id="${wish.id}" type="button" ${isReviewer() && m.available < 1 ? "disabled" : ""}><i data-lucide="ticket-check"></i>${isReviewer() ? "兑换" : "路路登录兑换"}</button>${isReviewer() ? `<div class="row-actions"><button class="icon-button" data-action="edit-wish" data-id="${wish.id}" title="编辑心愿"><i data-lucide="pencil"></i></button><button class="icon-button danger" data-action="delete-wish" data-id="${wish.id}" title="删除心愿"><i data-lucide="trash-2"></i></button></div>` : ""}</div></article>`;
   }).join("");
 }
 
@@ -241,34 +378,37 @@ function renderRedemptions() {
     target.innerHTML = `<div class="empty-state"><i data-lucide="ticket"></i><strong>还没有兑换流水</strong><span>达到兑换门槛后，从上方选择一份心愿。</span></div>`;
     return;
   }
-  target.innerHTML = sorted.map((item, index) => `<div class="redemption-row"><span class="redemption-index">${String(index + 1).padStart(2, "0")}</span><div class="redemption-main"><strong>${escapeHtml(item.wishTitle)}</strong><small>${item.completedAt ? `完成于 ${formatDate(item.completedAt)}` : "等待完成确认"}</small></div><span class="redemption-date">兑换于 ${formatDate(item.redeemedAt)}</span><span class="status-label ${statusClass(item.status)}">${escapeHtml(item.status)}</span><div class="redemption-actions">${isAdmin && item.status !== "已完成" ? `<button class="button button-outline" data-action="complete-redemption" data-id="${item.id}" type="button"><i data-lucide="check"></i>确认完成</button>` : ""}${isAdmin ? `<button class="icon-button danger" data-action="delete-redemption" data-id="${item.id}" title="撤销这次兑换"><i data-lucide="undo-2"></i></button>` : ""}</div></div>`).join("");
+  target.innerHTML = sorted.map((item, index) => `<div class="redemption-row"><span class="redemption-index">${String(index + 1).padStart(2, "0")}</span><div class="redemption-main"><strong>${escapeHtml(item.wishTitle)}</strong><small>${item.completedAt ? `完成于 ${formatDate(item.completedAt)}` : "等待路路小皇帝确认"}</small></div><span class="redemption-date">兑换于 ${formatDate(item.redeemedAt)}</span><span class="status-label ${statusClass(item.status)}">${escapeHtml(item.status)}</span><div class="redemption-actions">${isReviewer() && item.status !== "已完成" ? `<button class="button button-outline" data-action="complete-redemption" data-id="${item.id}" type="button"><i data-lucide="check"></i>确认完成</button>` : ""}${isReviewer() ? `<button class="icon-button danger" data-action="delete-redemption" data-id="${item.id}" title="撤销这次兑换"><i data-lucide="undo-2"></i></button>` : ""}</div></div>`).join("");
 }
 
 function renderSettings() {
   $("#thresholdInput").value = data.settings.threshold;
   $("#periodStartInput").value = data.settings.periodStart;
   $("#agreementInput").value = data.settings.agreement;
-  $("#adminStatus").textContent = isAdmin ? "管理员模式已解锁" : "访客模式";
+  const roleName = isRecorder() ? "方方 · 记录者" : isReviewer() ? "路路小皇帝 · 复核者" : "访客模式";
+  $("#adminStatus").textContent = isAdmin ? `${roleName} · 已解锁` : roleName;
   $("#adminStatus").classList.toggle("is-admin", isAdmin);
   const adminButton = $("#adminButton");
   adminButton.innerHTML = isAdmin
-    ? '<i data-lucide="shield-check" aria-hidden="true"></i><span>管理中心</span>'
-    : '<i data-lucide="lock-keyhole" aria-hidden="true"></i><span>管理员登录</span>';
+    ? `<i data-lucide="${isReviewer() ? "crown" : "pen-line"}" aria-hidden="true"></i><span>${roleName}</span>`
+    : '<i data-lucide="lock-keyhole" aria-hidden="true"></i><span>身份登录</span>';
   adminButton.classList.toggle("is-admin", isAdmin);
-  adminButton.setAttribute("aria-label", isAdmin ? "管理员已解锁，进入管理中心" : "管理员登录");
+  adminButton.setAttribute("aria-label", isAdmin ? `${roleName}已解锁，进入设置` : "选择身份登录");
   ["#thresholdInput", "#periodStartInput", "#agreementInput"].forEach((selector) => {
-    $(selector).disabled = !isAdmin;
+    $(selector).disabled = !isReviewer();
   });
   $$(".admin-only").forEach((element) => {
-    if (element.closest("#settingsForm") || element.matches("input, select, textarea")) element.disabled = !isAdmin;
-    else if (element.matches("button")) element.disabled = false;
+    if (element.matches("button")) element.disabled = false;
     element.classList.toggle("is-hidden-for-guest", !isAdmin);
   });
-  $("#privacyText").textContent = isAdmin ? "管理员已解锁 · 自动锁定" : "本地私密模式";
+  $$(".recorder-action").forEach((element) => { if (element.matches("button")) element.disabled = false; });
+  $$(".reviewer-action").forEach((element) => { element.disabled = element.closest("#settingsForm") ? !isReviewer() : false; });
+  $("#taskTitleInput").disabled = !isRecorder();
+  $("#privacyText").textContent = isAdmin ? `${roleName} · 退出即锁定` : "本地私密模式";
 }
 
 function renderView() {
-  const validViews = ["overview", "records", "wishes", "settings"];
+  const validViews = ["overview", "daily", "records", "issues", "wishes", "settings"];
   if (!validViews.includes(activeView)) activeView = "overview";
   $$("[data-view-panel]").forEach((panel) => {
     const visible = panel.dataset.viewPanel === activeView;
@@ -281,6 +421,9 @@ function renderView() {
 function render() {
   renderStats();
   renderRecentRecords();
+  renderMoments();
+  renderTasks();
+  renderIssues();
   renderWishPreview();
   renderRecords();
   renderWishes();
@@ -318,7 +461,21 @@ function closeModal(id) {
 function requireAdmin(action) {
   if (isAdmin) return true;
   openModal("authModal");
-  toast(action ? `需要管理员解锁后才能${action}` : "需要管理员解锁");
+  toast(action ? `请先选择身份登录后再${action}` : "请先选择身份登录");
+  return false;
+}
+
+function selectLoginRole(role) {
+  $("#loginRole").value = role;
+  $$("[data-login-role]").forEach((button) => button.classList.toggle("is-selected", button.dataset.loginRole === role));
+  $("#authError").hidden = true;
+}
+
+function requireRole(role, action) {
+  if (currentRole === role) return true;
+  selectLoginRole(role);
+  openModal("authModal");
+  toast(`需要${role === "recorder" ? "方方记录者" : "路路小皇帝复核者"}身份才能${action}`);
   return false;
 }
 
@@ -356,8 +513,9 @@ async function passwordRecord(value) {
   return `sha256:${sha256}|${fallback}`;
 }
 
-function currentPasswordHash() {
-  return localStorage.getItem(PASSWORD_HASH_KEY) || `sha256:${DEFAULT_PASSWORD_HASH}|fallback:${DEFAULT_PASSWORD_FALLBACK_HASH}`;
+function currentPasswordHash(role) {
+  const defaults = DEFAULT_PASSWORD_HASHES[role] || DEFAULT_PASSWORD_HASHES.recorder;
+  return localStorage.getItem(PASSWORD_HASH_KEYS[role]) || `sha256:${defaults.sha256}|fallback:${defaults.fallback}`;
 }
 
 async function passwordMatches(value, stored) {
@@ -369,48 +527,52 @@ async function passwordMatches(value, stored) {
   return stored === sha256 || stored === `sha256:${sha256}` || stored.split("|").includes(`sha256:${sha256}`);
 }
 
-function unlock() {
+function unlock(role) {
+  currentRole = role;
   isAdmin = true;
   touchAdminSession();
   closeModal("authModal");
   $("#passwordInput").value = "";
   $("#authError").hidden = true;
   render();
-  setView("settings");
-  toast("管理员模式已解锁");
+  setView(role === "recorder" ? "daily" : "overview");
+  toast(role === "recorder" ? "方方记录身份已解锁" : "路路小皇帝复核身份已解锁");
 }
 
 function resetLocalPassword() {
-  localStorage.removeItem(PASSWORD_HASH_KEY);
-  sessionStorage.removeItem(SESSION_KEY);
+  const role = $("#loginRole").value || currentRole || "recorder";
+  localStorage.removeItem(PASSWORD_HASH_KEYS[role]);
   isAdmin = false;
+  currentRole = null;
+  lastAdminActivity = 0;
   $("#passwordInput").value = "";
   $("#authError").hidden = true;
   render();
-  toast("本机密码已重置，请使用初始密码登录");
+  toast(`${role === "recorder" ? "方方" : "路路小皇帝"}的本机密码已重置`);
   setTimeout(() => $("#passwordInput").focus(), 30);
 }
 
 function logout() {
   isAdmin = false;
-  sessionStorage.removeItem(SESSION_KEY);
+  currentRole = null;
+  lastAdminActivity = 0;
   render();
-  toast("已退出管理员模式");
+  toast("已退出并重新锁定");
 }
 
 function checkAdminSession() {
   if (!isAdmin) return;
-  const lastActive = Number(sessionStorage.getItem(SESSION_KEY));
-  if (!Number.isFinite(lastActive) || Date.now() - lastActive > SESSION_TIMEOUT_MS) {
+  if (!lastAdminActivity || Date.now() - lastAdminActivity > SESSION_TIMEOUT_MS) {
     isAdmin = false;
-    sessionStorage.removeItem(SESSION_KEY);
+    currentRole = null;
+    lastAdminActivity = 0;
     render();
-    toast("管理员会话已自动锁定");
+    toast("身份会话已自动锁定");
   }
 }
 
 function openRecordEditor(id = "") {
-  if (!requireAdmin("编辑记录")) return;
+  if (!requireRole("recorder", "编辑行为日志")) return;
   const record = data.records.find((item) => item.id === id);
   $("#recordModalTitle").textContent = record ? "编辑复盘记录" : "新增复盘记录";
   $("#recordId").value = record?.id || "";
@@ -419,12 +581,13 @@ function openRecordEditor(id = "") {
   $("#recordSituation").value = record?.situation || "";
   $("#recordRepair").value = record?.repair || "";
   $("#recordConfirmation").value = record?.confirmation || "待确认";
+  $("#recordConfirmation").disabled = true;
   $("#recordNotes").value = record?.notes || "";
   openModal("recordModal");
 }
 
 function openWishEditor(id = "") {
-  if (!requireAdmin("编辑心愿")) return;
+  if (!requireRole("reviewer", "编辑心愿")) return;
   const wish = data.wishes.find((item) => item.id === id);
   $("#wishModalTitle").textContent = wish ? "编辑心愿" : "新增心愿";
   $("#wishId").value = wish?.id || "";
@@ -433,8 +596,91 @@ function openWishEditor(id = "") {
   openModal("wishModal");
 }
 
+function renderMomentImagePreview() {
+  const existing = editingMomentImageIds.map((id) => ({ id, dataUrl: imageCache.get(id)?.dataUrl, kind: "existing" })).filter((item) => item.dataUrl);
+  const pending = pendingMomentImages.map((item, index) => ({ id: String(index), dataUrl: item.dataUrl, kind: "pending" }));
+  const items = [...existing, ...pending];
+  $("#momentImagePreview").innerHTML = items.map((item) => `<div class="image-preview-item"><img src="${item.dataUrl}" alt="待上传照片预览" /><button type="button" data-action="remove-moment-image" data-kind="${item.kind}" data-id="${item.id}" aria-label="移除照片"><i data-lucide="x"></i></button></div>`).join("");
+  refreshIcons();
+}
+
+function openMomentEditor(id = "") {
+  if (!requireRole("recorder", "记录美好生活")) return;
+  const moment = data.moments.find((item) => item.id === id);
+  $("#momentModalTitle").textContent = moment ? "编辑美好记录" : "记录一件美好小事";
+  $("#momentId").value = moment?.id || "";
+  $("#momentDate").value = moment?.date || today();
+  $("#momentTitle").value = moment?.title || "";
+  $("#momentNote").value = moment?.note || "";
+  $("#momentImages").value = "";
+  pendingMomentImages = [];
+  editingMomentImageIds = [...(moment?.imageIds || [])];
+  originalMomentImageIds = [...editingMomentImageIds];
+  renderMomentImagePreview();
+  openModal("momentModal");
+}
+
+function openIssueEditor(id = "") {
+  if (!requireRole("recorder", "记录当前问题")) return;
+  const issue = data.issues.find((item) => item.id === id);
+  $("#issueModalTitle").textContent = issue ? "编辑问题记录" : "记录当前问题";
+  $("#issueId").value = issue?.id || "";
+  $("#issueDate").value = issue?.date || today();
+  $("#issueTitle").value = issue?.title || "";
+  $("#issueDescription").value = issue?.description || "";
+  $("#issueProposal").value = issue?.proposal || "";
+  openModal("issueModal");
+}
+
+function updateIssue(id, status) {
+  if (!requireRole("reviewer", "复核问题状态")) return;
+  const issue = data.issues.find((item) => item.id === id);
+  if (!issue) return;
+  issue.status = status;
+  issue.reviewedAt = today();
+  saveData();
+  render();
+  toast(status === "已解决" ? "问题已确认解决" : "问题已进入沟通中");
+}
+
+function toggleTask(id) {
+  if (!requireRole("recorder", "更新手账任务")) return;
+  const task = data.tasks.find((item) => item.id === id);
+  if (!task) return;
+  task.done = !task.done;
+  if (!task.done) {
+    task.reviewed = false;
+    task.reviewedAt = "";
+  }
+  saveData();
+  render();
+  toast(task.done ? "任务已完成，等待路路复核" : "任务已恢复为待完成");
+}
+
+function reviewTask(id) {
+  if (!requireRole("reviewer", "复核手账任务")) return;
+  const task = data.tasks.find((item) => item.id === id);
+  if (!task || !task.done) return;
+  task.reviewed = true;
+  task.reviewedAt = today();
+  saveData();
+  render();
+  toast("手账任务已复核");
+}
+
+function reviewMoment(id) {
+  if (!requireRole("reviewer", "复核美好记录")) return;
+  const moment = data.moments.find((item) => item.id === id);
+  if (!moment) return;
+  moment.reviewStatus = "已复核";
+  moment.reviewedAt = today();
+  saveData();
+  render();
+  toast("美好记录已复核");
+}
+
 function redeemWish(id) {
-  if (!requireAdmin("兑换心愿")) return;
+  if (!requireRole("reviewer", "兑换心愿")) return;
   const wish = data.wishes.find((item) => item.id === id);
   const m = metrics();
   if (!wish || m.available < 1) {
@@ -449,7 +695,7 @@ function redeemWish(id) {
 }
 
 function completeRedemption(id) {
-  if (!requireAdmin("确认兑换完成")) return;
+  if (!requireRole("reviewer", "确认兑换完成")) return;
   const item = data.redemptions.find((entry) => entry.id === id);
   if (!item) return;
   item.status = "已完成";
@@ -468,11 +714,16 @@ function downloadText(filename, content, type) {
   setTimeout(() => URL.revokeObjectURL(link.href), 0);
 }
 
-function exportBackup() {
+async function exportBackup() {
   if (!requireAdmin("导出备份")) return;
-  const payload = { version: DATA_VERSION, exportedAt: new Date().toISOString(), app: "lulu-fangfang-house", data };
-  downloadText(`lulu-fangfang-backup-${today()}.json`, JSON.stringify(payload, null, 2), "application/json;charset=utf-8");
-  toast("备份已下载");
+  try {
+    const media = await getAllMedia();
+    const payload = { version: DATA_VERSION, exportedAt: new Date().toISOString(), app: "lulu-fangfang-house", data, media };
+    downloadText(`lulu-fangfang-backup-${today()}.json`, JSON.stringify(payload, null, 2), "application/json;charset=utf-8");
+    toast(`完整备份已下载，包含 ${media.length} 张图片`);
+  } catch {
+    toast("备份失败：无法读取当前浏览器的图片库");
+  }
 }
 
 function csvCell(value) {
@@ -488,18 +739,26 @@ function exportRecordsCsv() {
 
 function importBackup() {
   if (!requireAdmin("导入备份")) return;
+  if (!confirm("导入会覆盖当前记录；完整备份中的图片也会替换本地图片库。确定继续吗？")) return;
   $("#importFile").click();
 }
 
 function handleImport(file) {
   const reader = new FileReader();
-  reader.onload = () => {
+  reader.onload = async () => {
     try {
       const parsed = JSON.parse(reader.result);
       const incoming = parsed.data || parsed;
       if (!incoming || !Array.isArray(incoming.records) || !Array.isArray(incoming.wishes) || !incoming.settings) throw new Error("invalid");
       data = normalizeData(incoming);
+      if (Array.isArray(parsed.media)) {
+        await clearAllMedia();
+        for (const item of parsed.media) {
+          if (item && typeof item.id === "string" && typeof item.dataUrl === "string" && item.dataUrl.startsWith("data:image/")) await putMedia(item);
+        }
+      }
       saveData();
+      await hydrateMediaCache();
       render();
       toast("备份已导入");
     } catch {
@@ -509,7 +768,9 @@ function handleImport(file) {
   reader.readAsText(file);
 }
 
-document.addEventListener("click", (event) => {
+document.addEventListener("click", async (event) => {
+  const roleOption = event.target.closest("[data-login-role]");
+  if (roleOption) selectLoginRole(roleOption.dataset.loginRole);
   const tab = event.target.closest("[data-view]");
   if (tab) setView(tab.dataset.view);
   const target = event.target.closest("[data-view-target]");
@@ -519,21 +780,52 @@ document.addEventListener("click", (event) => {
   const actionElement = event.target.closest("[data-action]");
   if (!actionElement) return;
   const action = actionElement.dataset.action;
+  if (action === "new-moment") openMomentEditor();
+  if (action === "edit-moment") openMomentEditor(actionElement.dataset.id);
+  if (action === "review-moment") reviewMoment(actionElement.dataset.id);
+  if (action === "remove-moment-image") {
+    if (actionElement.dataset.kind === "existing") editingMomentImageIds = editingMomentImageIds.filter((id) => id !== actionElement.dataset.id);
+    else pendingMomentImages.splice(Number(actionElement.dataset.id), 1);
+    renderMomentImagePreview();
+  }
+  if (action === "delete-moment" && requireRole("recorder", "删除美好记录") && confirm("确定删除这条美好记录和其中的本地照片吗？")) {
+    const moment = data.moments.find((item) => item.id === actionElement.dataset.id);
+    for (const id of moment?.imageIds || []) await deleteMedia(id).catch(() => {});
+    data.moments = data.moments.filter((item) => item.id !== actionElement.dataset.id);
+    saveData(); render(); toast("美好记录已删除");
+  }
+  if (action === "toggle-task") toggleTask(actionElement.dataset.id);
+  if (action === "review-task") reviewTask(actionElement.dataset.id);
+  if (action === "delete-task" && requireRole("recorder", "删除手账任务") && confirm("确定删除这项任务吗？")) {
+    data.tasks = data.tasks.filter((item) => item.id !== actionElement.dataset.id);
+    saveData(); render(); toast("任务已删除");
+  }
   if (action === "new-record") openRecordEditor();
   if (action === "edit-record") openRecordEditor(actionElement.dataset.id);
-  if (action === "delete-record" && requireAdmin("删除记录") && confirm("确定删除这条复盘记录吗？")) {
+  if (action === "confirm-record" && requireRole("reviewer", "复核行为日志")) {
+    const record = data.records.find((item) => item.id === actionElement.dataset.id);
+    if (record) { record.confirmation = actionElement.dataset.status; saveData(); render(); toast("行为日志复核状态已更新"); }
+  }
+  if (action === "delete-record" && requireRole("recorder", "删除行为日志") && confirm("确定删除这条行为日志吗？")) {
     data.records = data.records.filter((record) => record.id !== actionElement.dataset.id);
     saveData(); render(); toast("记录已删除");
+  }
+  if (action === "new-issue") openIssueEditor();
+  if (action === "edit-issue") openIssueEditor(actionElement.dataset.id);
+  if (action === "update-issue") updateIssue(actionElement.dataset.id, actionElement.dataset.status);
+  if (action === "delete-issue" && requireRole("recorder", "删除问题记录") && confirm("确定删除这条问题沟通记录吗？")) {
+    data.issues = data.issues.filter((item) => item.id !== actionElement.dataset.id);
+    saveData(); render(); toast("问题记录已删除");
   }
   if (action === "new-wish") openWishEditor();
   if (action === "edit-wish") openWishEditor(actionElement.dataset.id);
   if (action === "redeem-wish") redeemWish(actionElement.dataset.id);
-  if (action === "delete-wish" && requireAdmin("删除心愿") && confirm("确定删除这份心愿吗？已有兑换流水会继续保留。")) {
+  if (action === "delete-wish" && requireRole("reviewer", "删除心愿") && confirm("确定删除这份心愿吗？已有兑换流水会继续保留。")) {
     data.wishes = data.wishes.filter((wish) => wish.id !== actionElement.dataset.id);
     saveData(); render(); toast("心愿已删除");
   }
   if (action === "complete-redemption") completeRedemption(actionElement.dataset.id);
-  if (action === "delete-redemption" && requireAdmin("撤销兑换") && confirm("确定撤销这次兑换吗？对应的 1 份心愿余额会恢复。")) {
+  if (action === "delete-redemption" && requireRole("reviewer", "撤销兑换") && confirm("确定撤销这次兑换吗？对应的 1 份心愿余额会恢复。")) {
     data.redemptions = data.redemptions.filter((item) => item.id !== actionElement.dataset.id);
     saveData(); render(); toast("兑换已撤销，余额已恢复");
   }
@@ -541,16 +833,20 @@ document.addEventListener("click", (event) => {
   if (action === "export-csv") exportRecordsCsv();
   if (action === "import") importBackup();
   if (action === "logout") logout();
-  if (action === "reset-password" && confirm("只重置当前浏览器的管理员密码，不会删除任何记录。确定继续吗？")) resetLocalPassword();
-  if (action === "change-password" && requireAdmin("修改密码")) openModal("passwordModal");
+  if (action === "reset-password" && confirm("只重置当前所选身份在这个浏览器中的密码，不会删除数据。确定继续吗？")) resetLocalPassword();
+  if (action === "change-password" && requireAdmin("修改密码")) {
+    $("#passwordModalTitle").textContent = `修改${isRecorder() ? "方方" : "路路小皇帝"}的密码`;
+    openModal("passwordModal");
+  }
 });
 
 $("#adminButton").addEventListener("click", () => isAdmin ? setView("settings") : openModal("authModal"));
 
 $("#authForm").addEventListener("submit", async (event) => {
   event.preventDefault();
+  const role = $("#loginRole").value || "recorder";
   try {
-    const matches = await passwordMatches($("#passwordInput").value, currentPasswordHash());
+    const matches = await passwordMatches($("#passwordInput").value, currentPasswordHash(role));
     if (!matches) {
       $("#authError").textContent = "密码不正确，请重试。";
       $("#authError").hidden = false;
@@ -562,23 +858,84 @@ $("#authForm").addEventListener("submit", async (event) => {
     $("#authError").hidden = false;
     return;
   }
-  unlock();
+  unlock(role);
 });
 
 $("#recordForm").addEventListener("submit", (event) => {
   event.preventDefault();
-  if (!requireAdmin("保存记录")) return;
+  if (!requireRole("recorder", "保存行为日志")) return;
   const id = $("#recordId").value || `record-${Date.now()}`;
-  const record = { id, date: $("#recordDate").value, tone: $("#recordTone").value, situation: $("#recordSituation").value.trim(), repair: $("#recordRepair").value.trim(), confirmation: $("#recordConfirmation").value, notes: $("#recordNotes").value.trim() };
+  const record = { id, date: $("#recordDate").value, tone: $("#recordTone").value, situation: $("#recordSituation").value.trim(), repair: $("#recordRepair").value.trim(), confirmation: "待确认", notes: $("#recordNotes").value.trim() };
   const existingIndex = data.records.findIndex((item) => item.id === id);
   if (existingIndex >= 0) data.records[existingIndex] = record;
   else data.records.push(record);
   saveData(); closeModal("recordModal"); render(); toast(existingIndex >= 0 ? "记录已更新" : "记录已保存");
 });
 
+$("#momentImages").addEventListener("change", async (event) => {
+  const remaining = 4 - editingMomentImageIds.length - pendingMomentImages.length;
+  const selectedFiles = [...event.target.files];
+  const files = selectedFiles.slice(0, Math.max(0, remaining));
+  event.target.value = "";
+  if (!files.length) { toast("每条美好记录最多保存 4 张照片"); return; }
+  if (selectedFiles.length > files.length) toast(`本次只添加前 ${files.length} 张，单条记录最多 4 张`);
+  else toast("正在压缩照片，请稍候");
+  for (const file of files) {
+    try {
+      pendingMomentImages.push({ id: `image-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, name: file.name, dataUrl: await compressImage(file), createdAt: new Date().toISOString() });
+    } catch {
+      toast(`照片 ${file.name} 处理失败`);
+    }
+  }
+  renderMomentImagePreview();
+});
+
+$("#momentForm").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  if (!requireRole("recorder", "保存美好记录")) return;
+  const id = $("#momentId").value || `moment-${Date.now()}`;
+  for (const image of pendingMomentImages) await putMedia(image);
+  for (const removedId of originalMomentImageIds.filter((imageId) => !editingMomentImageIds.includes(imageId))) await deleteMedia(removedId).catch(() => {});
+  const existingIndex = data.moments.findIndex((item) => item.id === id);
+  const moment = { id, date: $("#momentDate").value, title: $("#momentTitle").value.trim(), note: $("#momentNote").value.trim(), imageIds: [...editingMomentImageIds, ...pendingMomentImages.map((image) => image.id)], reviewStatus: "待复核", reviewedAt: "", createdBy: "recorder" };
+  if (existingIndex >= 0) data.moments[existingIndex] = moment;
+  else data.moments.push(moment);
+  pendingMomentImages = [];
+  editingMomentImageIds = [];
+  originalMomentImageIds = [];
+  saveData(); closeModal("momentModal"); render(); toast(existingIndex >= 0 ? "美好记录已更新，等待重新复核" : "美好记录已保存");
+});
+
+$("#taskQuickForm").addEventListener("submit", (event) => {
+  event.preventDefault();
+  if (!requireRole("recorder", "添加手账任务")) return;
+  const title = $("#taskTitleInput").value.trim();
+  if (!title) { toast("请先写下要做的事情"); return; }
+  const date = $("#taskDateFilter").value || today();
+  data.tasks.push({ id: `task-${Date.now()}`, date, title, done: false, reviewed: false, reviewedAt: "", createdAt: new Date().toISOString(), createdBy: "recorder" });
+  $("#taskTitleInput").value = "";
+  saveData(); render(); toast("任务已加入手账");
+});
+
+$("#taskDateFilter").addEventListener("change", () => {
+  renderTasks();
+  refreshIcons();
+});
+
+$("#issueForm").addEventListener("submit", (event) => {
+  event.preventDefault();
+  if (!requireRole("recorder", "保存问题记录")) return;
+  const id = $("#issueId").value || `issue-${Date.now()}`;
+  const existingIndex = data.issues.findIndex((item) => item.id === id);
+  const issue = { id, date: $("#issueDate").value, title: $("#issueTitle").value.trim(), description: $("#issueDescription").value.trim(), proposal: $("#issueProposal").value.trim(), status: "待沟通", reviewedAt: "", createdBy: "recorder" };
+  if (existingIndex >= 0) data.issues[existingIndex] = issue;
+  else data.issues.push(issue);
+  saveData(); closeModal("issueModal"); render(); toast(existingIndex >= 0 ? "问题记录已更新" : "问题已记录，等待沟通");
+});
+
 $("#wishForm").addEventListener("submit", (event) => {
   event.preventDefault();
-  if (!requireAdmin("保存心愿")) return;
+  if (!requireRole("reviewer", "保存心愿")) return;
   const id = $("#wishId").value || `wish-${Date.now()}`;
   const wish = { id, title: $("#wishTitle").value.trim(), description: $("#wishDescription").value.trim() };
   const existingIndex = data.wishes.findIndex((item) => item.id === id);
@@ -589,7 +946,7 @@ $("#wishForm").addEventListener("submit", (event) => {
 
 $("#settingsForm").addEventListener("submit", (event) => {
   event.preventDefault();
-  if (!requireAdmin("保存规则")) return;
+  if (!requireRole("reviewer", "保存规则")) return;
   data.settings.threshold = Math.max(1, Number($("#thresholdInput").value) || 1);
   data.settings.periodStart = $("#periodStartInput").value || today();
   data.settings.agreement = $("#agreementInput").value.trim() || defaultData.settings.agreement;
@@ -599,11 +956,11 @@ $("#settingsForm").addEventListener("submit", (event) => {
 $("#passwordForm").addEventListener("submit", async (event) => {
   event.preventDefault();
   const error = $("#passwordError");
-  if (!(await passwordMatches($("#currentPassword").value, currentPasswordHash()))) { error.textContent = "当前密码不正确。"; error.hidden = false; return; }
+  if (!currentRole || !(await passwordMatches($("#currentPassword").value, currentPasswordHash(currentRole)))) { error.textContent = "当前密码不正确。"; error.hidden = false; return; }
   if ($("#newPassword").value.length < 8) { error.textContent = "新密码至少需要 8 位。"; error.hidden = false; return; }
   if ($("#newPassword").value !== $("#confirmPassword").value) { error.textContent = "两次输入的新密码不一致。"; error.hidden = false; return; }
-  localStorage.setItem(PASSWORD_HASH_KEY, await passwordRecord($("#newPassword").value));
-  $("#passwordForm").reset(); error.hidden = true; closeModal("passwordModal"); toast("管理员密码已更新");
+  localStorage.setItem(PASSWORD_HASH_KEYS[currentRole], await passwordRecord($("#newPassword").value));
+  $("#passwordForm").reset(); error.hidden = true; closeModal("passwordModal"); toast("当前身份密码已更新");
 });
 
 $("#importFile").addEventListener("change", (event) => {
@@ -631,6 +988,18 @@ $("#cycleOnlyFilter").addEventListener("change", (event) => {
 });
 
 window.addEventListener("hashchange", () => { activeView = location.hash.replace("#", "") || "overview"; renderView(); });
+window.addEventListener("pagehide", () => {
+  isAdmin = false;
+  currentRole = null;
+  lastAdminActivity = 0;
+});
+window.addEventListener("pageshow", (event) => {
+  if (!event.persisted) return;
+  isAdmin = false;
+  currentRole = null;
+  lastAdminActivity = 0;
+  render();
+});
 document.addEventListener("pointerdown", touchAdminSession, { passive: true });
 document.addEventListener("keydown", (event) => {
   touchAdminSession();
@@ -638,5 +1007,11 @@ document.addEventListener("keydown", (event) => {
 });
 setInterval(checkAdminSession, 60 * 1000);
 
-$("#todayLabel").textContent = formatDate(today());
-render();
+async function initialize() {
+  $("#todayLabel").textContent = formatDate(today());
+  $("#taskDateFilter").value = today();
+  await hydrateMediaCache();
+  render();
+}
+
+initialize();
