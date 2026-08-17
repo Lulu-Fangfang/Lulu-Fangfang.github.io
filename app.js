@@ -5,6 +5,7 @@ const PASSWORD_HASH_KEYS = {
 };
 const DATA_VERSION = 3;
 const SESSION_TIMEOUT_MS = 30 * 60 * 1000;
+const CLOUD_CONFIG = window.LULU_FANGFANG_CLOUD_CONFIG || null;
 const DEFAULT_PASSWORD_HASHES = {
   recorder: { sha256: "9a0dd7ba868524e126086edda337dac92c8b4363a115edc709e8b3523a95a696", fallback: "5d45f3cfd18d6d87198fb2e795e11db1" },
   reviewer: { sha256: "d1228b0c90170b196f6955986a61382313cf9f1f4c6cd919177eea6e772ea9bc", fallback: "06607d4fd0331b79024198e717d3c5af" },
@@ -41,6 +42,15 @@ let pendingMomentImages = [];
 let editingMomentImageIds = [];
 let originalMomentImageIds = [];
 const imageCache = new Map();
+let cloudClient = null;
+let cloudSchemaReady = false;
+let cloudContext = null;
+let cloudChannel = null;
+let cloudSaveChain = Promise.resolve();
+let cloudSyncState = "checking";
+let cloudSyncDetail = "正在连接 Supabase";
+let pendingLocalMigration = null;
+let applyingRemoteState = false;
 
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => [...document.querySelectorAll(selector)];
@@ -94,6 +104,9 @@ function loadData() {
 function saveData() {
   data.version = DATA_VERSION;
   localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+  if (!cloudContext || applyingRemoteState) return;
+  if (pendingLocalMigration) pendingLocalMigration = clone(data);
+  else queueCloudSave(clone(data));
 }
 
 const MEDIA_DB_NAME = "lulu-fangfang-media-v1";
@@ -121,19 +134,22 @@ async function mediaTransaction(mode, handler) {
   });
 }
 
-async function putMedia(item) {
+async function putMedia(item, { syncCloud = true } = {}) {
   await mediaTransaction("readwrite", (store) => store.put(item));
   imageCache.set(item.id, item);
+  if (syncCloud && cloudContext && !pendingLocalMigration) await uploadCloudMedia(item);
 }
 
-async function deleteMedia(id) {
+async function deleteMedia(id, { syncCloud = true } = {}) {
   await mediaTransaction("readwrite", (store) => store.delete(id));
   imageCache.delete(id);
+  if (syncCloud && cloudContext && !pendingLocalMigration) await deleteCloudMedia(id);
 }
 
-async function clearAllMedia() {
+async function clearAllMedia({ syncCloud = true } = {}) {
   await mediaTransaction("readwrite", (store) => store.clear());
   imageCache.clear();
+  if (syncCloud && cloudContext && !pendingLocalMigration) await clearCloudMedia();
 }
 
 async function getAllMedia() {
@@ -180,6 +196,284 @@ async function compressImage(file) {
   canvas.height = Math.max(1, Math.round(image.naturalHeight * scale));
   canvas.getContext("2d").drawImage(image, 0, 0, canvas.width, canvas.height);
   return canvas.toDataURL("image/webp", 0.82);
+}
+
+function setCloudSyncState(state, detail) {
+  cloudSyncState = state;
+  cloudSyncDetail = detail;
+  if ($("#cloudSyncStatus")) renderSettings();
+}
+
+function hasMeaningfulData(value) {
+  if (!value) return false;
+  const populatedCollections = ["records", "redemptions", "moments", "tasks", "issues"]
+    .some((key) => Array.isArray(value[key]) && value[key].length > 0);
+  return populatedCollections
+    || JSON.stringify(value.settings || {}) !== JSON.stringify(defaultData.settings)
+    || JSON.stringify(value.wishes || []) !== JSON.stringify(defaultData.wishes);
+}
+
+function cloudRoleEmail(role) {
+  return CLOUD_CONFIG?.roleEmails?.[role] || "";
+}
+
+function friendlyCloudError(error) {
+  const message = String(error?.message || error || "");
+  if (/invalid login credentials/i.test(message)) return "云端密码不正确，请重试。";
+  if (/email not confirmed/i.test(message)) return "该身份尚未在 Supabase 中确认。";
+  if (/membership_required|no rows|not a member/i.test(message)) return "账号已登录，但尚未加入这个小家。请先执行 Supabase 初始化 SQL。";
+  if (/failed to fetch|network|load failed/i.test(message)) return "暂时无法连接 Supabase，请检查网络后重试。";
+  return `云端操作失败：${message || "未知错误"}`;
+}
+
+async function initializeCloud() {
+  if (!CLOUD_CONFIG?.url || !CLOUD_CONFIG?.publishableKey || !window.supabase?.createClient) {
+    cloudSchemaReady = false;
+    setCloudSyncState("unavailable", "Supabase 客户端未能加载，继续使用本机模式");
+    return;
+  }
+
+  cloudClient = window.supabase.createClient(CLOUD_CONFIG.url, CLOUD_CONFIG.publishableKey, {
+    auth: {
+      persistSession: false,
+      autoRefreshToken: true,
+      detectSessionInUrl: false,
+    },
+  });
+
+  try {
+    const { data: ready, error } = await cloudClient.rpc("house_cloud_ready");
+    if (error || ready !== true) {
+      cloudSchemaReady = false;
+      setCloudSyncState("setup", "连接有效，等待执行 supabase-setup.sql");
+      return;
+    }
+    cloudSchemaReady = true;
+    setCloudSyncState("ready", "Supabase 已就绪，登录后开始同步");
+  } catch {
+    cloudSchemaReady = false;
+    setCloudSyncState("unavailable", "暂时无法访问 Supabase，继续使用本机模式");
+  }
+}
+
+function cloudMediaPath(id) {
+  return `${cloudContext.householdId}/${encodeURIComponent(id)}`;
+}
+
+async function uploadCloudMedia(item) {
+  if (!cloudContext || !item?.dataUrl) return;
+  const blob = await fetch(item.dataUrl).then((response) => response.blob());
+  const { error } = await cloudClient.storage
+    .from(CLOUD_CONFIG.bucket)
+    .upload(cloudMediaPath(item.id), blob, { upsert: true, contentType: blob.type || "image/webp", cacheControl: "3600" });
+  if (error) throw error;
+}
+
+async function deleteCloudMedia(id) {
+  if (!cloudContext) return;
+  const { error } = await cloudClient.storage.from(CLOUD_CONFIG.bucket).remove([cloudMediaPath(id)]);
+  if (error) throw error;
+}
+
+async function clearCloudMedia() {
+  if (!cloudContext) return;
+  const { data: objects, error } = await cloudClient.storage
+    .from(CLOUD_CONFIG.bucket)
+    .list(cloudContext.householdId, { limit: 1000 });
+  if (error) throw error;
+  const paths = (objects || []).filter((item) => item.name).map((item) => `${cloudContext.householdId}/${item.name}`);
+  if (!paths.length) return;
+  const { error: removeError } = await cloudClient.storage.from(CLOUD_CONFIG.bucket).remove(paths);
+  if (removeError) throw removeError;
+}
+
+async function downloadCloudMedia(id) {
+  if (!cloudContext) return null;
+  const { data: blob, error } = await cloudClient.storage.from(CLOUD_CONFIG.bucket).download(cloudMediaPath(id));
+  if (error) throw error;
+  return {
+    id,
+    name: `${id}.webp`,
+    dataUrl: await fileAsDataUrl(blob),
+    createdAt: new Date().toISOString(),
+  };
+}
+
+function referencedImageIds(value = data) {
+  return [...new Set((value.moments || []).flatMap((moment) => moment.imageIds || []))];
+}
+
+async function hydrateCloudMediaForData() {
+  if (!cloudContext) return;
+  const missingIds = referencedImageIds().filter((id) => !imageCache.has(id));
+  for (let index = 0; index < missingIds.length; index += 4) {
+    const batch = missingIds.slice(index, index + 4);
+    await Promise.all(batch.map(async (id) => {
+      try {
+        const item = await downloadCloudMedia(id);
+        if (item) await putMedia(item, { syncCloud: false });
+      } catch {
+        // A missing remote image should not block the rest of the shared records.
+      }
+    }));
+  }
+}
+
+async function applyCloudState(payload, revision, { notify = false } = {}) {
+  applyingRemoteState = true;
+  data = normalizeData(payload || {});
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+  if (cloudContext) cloudContext.revision = Number(revision) || 0;
+  applyingRemoteState = false;
+  await hydrateCloudMediaForData();
+  render();
+  setCloudSyncState("synced", `云端已同步 · 版本 ${cloudContext?.revision || 0}`);
+  if (notify) toast("已收到另一台设备的最新记录");
+}
+
+async function reloadCloudState({ notify = false } = {}) {
+  if (!cloudContext) return;
+  const { data: row, error } = await cloudClient
+    .from("house_state")
+    .select("payload, revision")
+    .eq("household_id", cloudContext.householdId)
+    .single();
+  if (error) throw error;
+  await applyCloudState(row.payload, row.revision, { notify });
+}
+
+async function saveCloudSnapshot(snapshot, generation) {
+  if (!cloudContext || generation !== cloudSyncGeneration) return;
+  setCloudSyncState("syncing", "正在上传最新修改");
+  const { data: result, error } = await cloudClient.rpc("save_house_state", {
+    p_payload: snapshot,
+    p_expected_revision: cloudContext.revision,
+  });
+  if (generation !== cloudSyncGeneration) return;
+  if (error) {
+    if (error.code === "40001" || /SYNC_CONFLICT/i.test(error.message || "")) {
+      cloudSyncGeneration += 1;
+      await reloadCloudState();
+      setCloudSyncState("error", "检测到其他设备先保存，已载入云端版本");
+      toast("另一台设备刚刚更新了数据，已载入云端版本，请重新执行本次操作");
+      return;
+    }
+    throw error;
+  }
+  const saved = Array.isArray(result) ? result[0] : result;
+  cloudContext.revision = Number(saved?.new_revision) || cloudContext.revision + 1;
+  setCloudSyncState("synced", `云端已同步 · 版本 ${cloudContext.revision}`);
+}
+
+let cloudSyncGeneration = 0;
+
+function queueCloudSave(snapshot) {
+  const generation = cloudSyncGeneration;
+  cloudSaveChain = cloudSaveChain
+    .then(() => saveCloudSnapshot(snapshot, generation))
+    .catch((error) => {
+      setCloudSyncState("error", friendlyCloudError(error));
+      toast("云端同步失败，本机缓存仍然保留");
+    });
+}
+
+function subscribeToCloudState() {
+  if (!cloudContext) return;
+  if (cloudChannel) cloudClient.removeChannel(cloudChannel);
+  cloudChannel = cloudClient
+    .channel(`house-state-${cloudContext.householdId}`)
+    .on("postgres_changes", {
+      event: "UPDATE",
+      schema: "public",
+      table: "house_state",
+      filter: `household_id=eq.${cloudContext.householdId}`,
+    }, (event) => {
+      setTimeout(() => {
+        if (!cloudContext || Number(event.new.revision) <= cloudContext.revision) return;
+        applyCloudState(event.new.payload, event.new.revision, { notify: true }).catch((error) => {
+          setCloudSyncState("error", friendlyCloudError(error));
+        });
+      }, 150);
+    })
+    .subscribe((status) => {
+      if (status === "SUBSCRIBED" && !pendingLocalMigration) setCloudSyncState("synced", `实时同步已连接 · 版本 ${cloudContext.revision}`);
+    });
+}
+
+async function loginCloud(role, password) {
+  if (!cloudClient || !cloudSchemaReady) throw new Error("云端尚未初始化");
+  const email = cloudRoleEmail(role);
+  if (!email) throw new Error("未配置该身份的云端账号");
+  setCloudSyncState("authenticating", "正在验证 Supabase 身份");
+  const { data: authResult, error: authError } = await cloudClient.auth.signInWithPassword({ email, password });
+  if (authError) throw authError;
+
+  const { data: rows, error: contextError } = await cloudClient.rpc("get_my_household");
+  const row = Array.isArray(rows) ? rows[0] : rows;
+  if (contextError || !row) {
+    await cloudClient.auth.signOut({ scope: "local" });
+    throw contextError || new Error("MEMBERSHIP_REQUIRED");
+  }
+  if (row.member_role !== role) {
+    await cloudClient.auth.signOut({ scope: "local" });
+    throw new Error("登录账号与所选身份不一致");
+  }
+
+  const localSnapshot = clone(data);
+  cloudContext = {
+    householdId: row.household_id,
+    revision: Number(row.revision) || 0,
+    userId: authResult.user.id,
+    role: row.member_role,
+    displayName: row.display_name,
+  };
+  cloudSyncGeneration += 1;
+
+  const remotePayload = row.payload && typeof row.payload === "object" ? row.payload : {};
+  if (!Object.keys(remotePayload).length && hasMeaningfulData(localSnapshot)) {
+    pendingLocalMigration = localSnapshot;
+    data = localSnapshot;
+    setCloudSyncState("migration", "云端为空，可将当前浏览器数据一键迁移");
+  } else {
+    pendingLocalMigration = null;
+    await applyCloudState(remotePayload, row.revision);
+  }
+  subscribeToCloudState();
+  return row.member_role;
+}
+
+async function migrateLocalDataToCloud() {
+  if (!cloudContext || !pendingLocalMigration) return;
+  if (!confirm("确定把当前浏览器的所有记录和图片写入这个 Supabase 小家吗？")) return;
+  const snapshot = normalizeData(pendingLocalMigration);
+  const media = await getAllMedia();
+  setCloudSyncState("syncing", `正在上传 ${media.length} 张本机图片`);
+  try {
+    for (const item of media) await uploadCloudMedia(item);
+    pendingLocalMigration = null;
+    data = snapshot;
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+    await saveCloudSnapshot(clone(data), cloudSyncGeneration);
+    render();
+    toast("本机记录和图片已迁移到 Supabase");
+  } catch (error) {
+    pendingLocalMigration = snapshot;
+    setCloudSyncState("error", friendlyCloudError(error));
+    toast("迁移未完成，本机数据没有丢失");
+  }
+}
+
+function releaseCloudSession() {
+  cloudSyncGeneration += 1;
+  if (cloudChannel && cloudClient) cloudClient.removeChannel(cloudChannel);
+  cloudChannel = null;
+  cloudContext = null;
+  pendingLocalMigration = null;
+  if (cloudClient) cloudClient.auth.signOut({ scope: "local" }).catch(() => {});
+  if (cloudSchemaReady) {
+    cloudSyncState = "ready";
+    cloudSyncDetail = "Supabase 已就绪，登录后开始同步";
+  }
 }
 
 function touchAdminSession() {
@@ -398,13 +692,49 @@ function renderSettings() {
     $(selector).disabled = !isReviewer();
   });
   $$(".admin-only").forEach((element) => {
+    element.hidden = !isAdmin;
     if (element.matches("button")) element.disabled = false;
-    element.classList.toggle("is-hidden-for-guest", !isAdmin);
   });
   $$(".recorder-action").forEach((element) => { if (element.matches("button")) element.disabled = false; });
   $$(".reviewer-action").forEach((element) => { element.disabled = element.closest("#settingsForm") ? !isReviewer() : false; });
   $("#taskTitleInput").disabled = !isRecorder();
-  $("#privacyText").textContent = isAdmin ? `${roleName} · 退出即锁定` : "本地私密模式";
+  const cloudActive = Boolean(cloudContext);
+  const cloudConfigured = cloudSchemaReady;
+  const statusLabels = {
+    checking: "检查云端连接",
+    setup: "等待初始化",
+    unavailable: "云端暂不可用",
+    ready: "云端等待登录",
+    authenticating: "正在验证身份",
+    migration: "本机数据待迁移",
+    syncing: "正在同步",
+    synced: "云端同步正常",
+    error: "同步需要处理",
+  };
+  $("#cloudModeTitle").textContent = cloudConfigured ? "当前模式：Supabase 云端同步" : "当前模式：本机安全缓存";
+  $("#cloudModeDescription").textContent = cloudConfigured
+    ? "文字和压缩图片同步到两人专属云端，本机保留缓存；刷新后仍需重新登录。"
+    : "公开连接信息已配置；执行 supabase-setup.sql 前，网站继续使用原有本机数据。";
+  $("#cloudSyncStatus").textContent = statusLabels[cloudSyncState] || "连接状态未知";
+  $("#cloudSyncDetail").textContent = cloudSyncDetail;
+  const syncDot = $("#cloudSyncDot");
+  syncDot.className = "cloud-sync-dot";
+  if (["ready", "synced"].includes(cloudSyncState)) syncDot.classList.add("is-ready");
+  if (["checking", "authenticating", "migration", "syncing"].includes(cloudSyncState)) syncDot.classList.add("is-busy");
+  if (["unavailable", "error"].includes(cloudSyncState)) syncDot.classList.add("is-error");
+  $("#migrateCloudButton").hidden = !(cloudActive && pendingLocalMigration);
+  $("#localPasswordResetButton").hidden = cloudConfigured;
+  $("#localPasswordResetNote").hidden = cloudConfigured;
+  $("#authDescription").textContent = cloudConfigured
+    ? "使用 Supabase 验证身份并同步两台设备。刷新或重新进入后需要再次输入密码。"
+    : "云端表尚未初始化，暂时使用本机身份密码。刷新或重新进入后需要再次输入。";
+  $("#momentStorageStatus").textContent = cloudConfigured ? "Supabase 私有图片同步" : "本机图片缓存";
+  $("#momentStorageNote").textContent = cloudActive ? "会自动压缩并同步到两人的私有云端。" : "会自动压缩并先保存在当前浏览器。";
+  $("#passwordDescription").textContent = cloudActive ? "新密码会更新到当前 Supabase 身份。" : "新密码只保存在当前浏览器。";
+  $("#footerDataStatus").textContent = cloudConfigured ? "Supabase 云端同步 · 本机缓存" : "数据保存在此浏览器";
+  $("#privacyText").textContent = isAdmin
+    ? `${roleName} · ${cloudActive ? "云端同步" : "本机模式"}`
+    : cloudConfigured ? "云端私密模式" : "本地私密模式";
 }
 
 function renderView() {
@@ -536,10 +866,15 @@ function unlock(role) {
   $("#authError").hidden = true;
   render();
   setView(role === "recorder" ? "daily" : "overview");
-  toast(role === "recorder" ? "方方记录身份已解锁" : "路路小皇帝复核身份已解锁");
+  const mode = cloudContext ? "，云端同步已连接" : "，当前为本机模式";
+  toast(`${role === "recorder" ? "方方记录身份已解锁" : "路路小皇帝复核身份已解锁"}${mode}`);
 }
 
 function resetLocalPassword() {
+  if (cloudSchemaReady) {
+    toast("云端密码请登录后在设置中修改");
+    return;
+  }
   const role = $("#loginRole").value || currentRole || "recorder";
   localStorage.removeItem(PASSWORD_HASH_KEYS[role]);
   isAdmin = false;
@@ -553,6 +888,7 @@ function resetLocalPassword() {
 }
 
 function logout() {
+  releaseCloudSession();
   isAdmin = false;
   currentRole = null;
   lastAdminActivity = 0;
@@ -563,6 +899,7 @@ function logout() {
 function checkAdminSession() {
   if (!isAdmin) return;
   if (!lastAdminActivity || Date.now() - lastAdminActivity > SESSION_TIMEOUT_MS) {
+    releaseCloudSession();
     isAdmin = false;
     currentRole = null;
     lastAdminActivity = 0;
@@ -717,6 +1054,7 @@ function downloadText(filename, content, type) {
 async function exportBackup() {
   if (!requireAdmin("导出备份")) return;
   try {
+    if (cloudContext) await hydrateCloudMediaForData();
     const media = await getAllMedia();
     const payload = { version: DATA_VERSION, exportedAt: new Date().toISOString(), app: "lulu-fangfang-house", data, media };
     downloadText(`lulu-fangfang-backup-${today()}.json`, JSON.stringify(payload, null, 2), "application/json;charset=utf-8");
@@ -761,8 +1099,8 @@ function handleImport(file) {
       await hydrateMediaCache();
       render();
       toast("备份已导入");
-    } catch {
-      toast("导入失败：文件格式不正确");
+    } catch (error) {
+      toast(error?.message === "invalid" ? "导入失败：文件格式不正确" : "导入失败：数据或图片未能完整写入");
     }
   };
   reader.readAsText(file);
@@ -832,8 +1170,9 @@ document.addEventListener("click", async (event) => {
   if (action === "export") exportBackup();
   if (action === "export-csv") exportRecordsCsv();
   if (action === "import") importBackup();
+  if (action === "migrate-cloud") migrateLocalDataToCloud();
   if (action === "logout") logout();
-  if (action === "reset-password" && confirm("只重置当前所选身份在这个浏览器中的密码，不会删除数据。确定继续吗？")) resetLocalPassword();
+  if (action === "reset-password" && !cloudSchemaReady && confirm("只重置当前所选身份在这个浏览器中的密码，不会删除数据。确定继续吗？")) resetLocalPassword();
   if (action === "change-password" && requireAdmin("修改密码")) {
     $("#passwordModalTitle").textContent = `修改${isRecorder() ? "方方" : "路路小皇帝"}的密码`;
     openModal("passwordModal");
@@ -845,20 +1184,32 @@ $("#adminButton").addEventListener("click", () => isAdmin ? setView("settings") 
 $("#authForm").addEventListener("submit", async (event) => {
   event.preventDefault();
   const role = $("#loginRole").value || "recorder";
+  const password = $("#passwordInput").value;
+  const submitButton = $("#authSubmitButton");
+  submitButton.disabled = true;
   try {
-    const matches = await passwordMatches($("#passwordInput").value, currentPasswordHash(role));
-    if (!matches) {
-      $("#authError").textContent = "密码不正确，请重试。";
-      $("#authError").hidden = false;
-      $("#passwordInput").select();
-      return;
+    if (cloudSchemaReady) {
+      const verifiedRole = await loginCloud(role, password);
+      unlock(verifiedRole);
+    } else {
+      const matches = await passwordMatches(password, currentPasswordHash(role));
+      if (!matches) throw new Error("LOCAL_PASSWORD_MISMATCH");
+      unlock(role);
     }
-  } catch {
-    $("#authError").textContent = "当前浏览器无法完成密码校验，请改用 HTTPS 或本地服务器打开。";
+  } catch (error) {
+    releaseCloudSession();
+    isAdmin = false;
+    currentRole = null;
+    lastAdminActivity = 0;
+    render();
+    $("#authError").textContent = error?.message === "LOCAL_PASSWORD_MISMATCH"
+      ? "密码不正确，请重试。"
+      : friendlyCloudError(error);
     $("#authError").hidden = false;
-    return;
+    $("#passwordInput").select();
+  } finally {
+    submitButton.disabled = false;
   }
-  unlock(role);
 });
 
 $("#recordForm").addEventListener("submit", (event) => {
@@ -894,8 +1245,14 @@ $("#momentForm").addEventListener("submit", async (event) => {
   event.preventDefault();
   if (!requireRole("recorder", "保存美好记录")) return;
   const id = $("#momentId").value || `moment-${Date.now()}`;
-  for (const image of pendingMomentImages) await putMedia(image);
-  for (const removedId of originalMomentImageIds.filter((imageId) => !editingMomentImageIds.includes(imageId))) await deleteMedia(removedId).catch(() => {});
+  try {
+    for (const image of pendingMomentImages) await putMedia(image);
+    for (const removedId of originalMomentImageIds.filter((imageId) => !editingMomentImageIds.includes(imageId))) await deleteMedia(removedId);
+  } catch (error) {
+    setCloudSyncState("error", friendlyCloudError(error));
+    toast("图片未能完整保存，请检查网络后重试");
+    return;
+  }
   const existingIndex = data.moments.findIndex((item) => item.id === id);
   const moment = { id, date: $("#momentDate").value, title: $("#momentTitle").value.trim(), note: $("#momentNote").value.trim(), imageIds: [...editingMomentImageIds, ...pendingMomentImages.map((image) => image.id)], reviewStatus: "待复核", reviewedAt: "", createdBy: "recorder" };
   if (existingIndex >= 0) data.moments[existingIndex] = moment;
@@ -956,11 +1313,31 @@ $("#settingsForm").addEventListener("submit", (event) => {
 $("#passwordForm").addEventListener("submit", async (event) => {
   event.preventDefault();
   const error = $("#passwordError");
-  if (!currentRole || !(await passwordMatches($("#currentPassword").value, currentPasswordHash(currentRole)))) { error.textContent = "当前密码不正确。"; error.hidden = false; return; }
   if ($("#newPassword").value.length < 8) { error.textContent = "新密码至少需要 8 位。"; error.hidden = false; return; }
   if ($("#newPassword").value !== $("#confirmPassword").value) { error.textContent = "两次输入的新密码不一致。"; error.hidden = false; return; }
-  localStorage.setItem(PASSWORD_HASH_KEYS[currentRole], await passwordRecord($("#newPassword").value));
-  $("#passwordForm").reset(); error.hidden = true; closeModal("passwordModal"); toast("当前身份密码已更新");
+  try {
+    if (!currentRole) throw new Error("当前身份已锁定");
+    if (cloudContext) {
+      const { error: verifyError } = await cloudClient.auth.signInWithPassword({
+        email: cloudRoleEmail(currentRole),
+        password: $("#currentPassword").value,
+      });
+      if (verifyError) throw new Error("当前密码不正确。");
+      const { error: updateError } = await cloudClient.auth.updateUser({ password: $("#newPassword").value });
+      if (updateError) throw updateError;
+    } else {
+      const matches = await passwordMatches($("#currentPassword").value, currentPasswordHash(currentRole));
+      if (!matches) throw new Error("当前密码不正确。");
+      localStorage.setItem(PASSWORD_HASH_KEYS[currentRole], await passwordRecord($("#newPassword").value));
+    }
+    $("#passwordForm").reset();
+    error.hidden = true;
+    closeModal("passwordModal");
+    toast(cloudContext ? "当前身份的云端密码已更新" : "当前身份密码已更新");
+  } catch (passwordError) {
+    error.textContent = friendlyCloudError(passwordError).replace(/^云端操作失败：/, "");
+    error.hidden = false;
+  }
 });
 
 $("#importFile").addEventListener("change", (event) => {
@@ -989,6 +1366,7 @@ $("#cycleOnlyFilter").addEventListener("change", (event) => {
 
 window.addEventListener("hashchange", () => { activeView = location.hash.replace("#", "") || "overview"; renderView(); });
 window.addEventListener("pagehide", () => {
+  releaseCloudSession();
   isAdmin = false;
   currentRole = null;
   lastAdminActivity = 0;
@@ -1011,6 +1389,8 @@ async function initialize() {
   $("#todayLabel").textContent = formatDate(today());
   $("#taskDateFilter").value = today();
   await hydrateMediaCache();
+  render();
+  await initializeCloud();
   render();
 }
 

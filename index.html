@@ -10,9 +10,11 @@
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Noto+Sans+SC:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
-    <link rel="stylesheet" href="styles.css?v=20260817-6" />
+    <link rel="stylesheet" href="styles.css?v=20260817-7" />
     <script src="https://unpkg.com/lucide@latest" defer></script>
-    <script type="module" src="app.js?v=20260817-6"></script>
+    <script src="supabase-config.js?v=20260817-7" defer></script>
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.112.3/dist/umd/supabase.min.js" defer></script>
+    <script src="app.js?v=20260817-7" defer></script>
   </head>
   <body>
     <div class="app-shell">
@@ -112,7 +114,7 @@
 
         <section class="view" id="dailyView" data-view-panel="daily" hidden>
           <div class="view-heading"><div><p class="eyebrow">BEAUTIFUL DAYS</p><h2>日常美好记录</h2><p>把值得记住的小事和照片留在这里，由方方记录，路路小皇帝复核。</p></div><button class="button button-primary recorder-action" data-action="new-moment" type="button"><i data-lucide="image-plus" aria-hidden="true"></i>记录美好</button></div>
-          <div class="module-status-strip"><span><i data-lucide="pen-line"></i>方方负责记录</span><span><i data-lucide="badge-check"></i>路路小皇帝负责复核</span><span><i data-lucide="database"></i>图片保存在当前浏览器</span></div>
+          <div class="module-status-strip"><span><i data-lucide="pen-line"></i>方方负责记录</span><span><i data-lucide="badge-check"></i>路路小皇帝负责复核</span><span><i data-lucide="cloud"></i><b id="momentStorageStatus">本机图片缓存</b></span></div>
           <div class="moments-grid" id="momentsGrid"></div>
 
           <section class="journal-section">
@@ -129,7 +131,7 @@
             <label class="search-control"><i data-lucide="search" aria-hidden="true"></i><input id="recordSearch" type="search" placeholder="搜索情境、行动或备注" /></label>
             <label class="select-control"><span>状态</span><select id="recordStatusFilter"><option value="all">全部状态</option><option value="待确认">待确认</option><option value="已确认">已确认</option><option value="需要再沟通">需要再沟通</option></select></label>
             <label class="switch-control"><input id="cycleOnlyFilter" type="checkbox" /><span>仅本周期</span></label>
-            <button class="button button-outline admin-only" data-action="export-csv" type="button"><i data-lucide="file-down" aria-hidden="true"></i>导出 CSV</button>
+            <button class="button button-outline admin-only" data-action="export-csv" type="button" hidden><i data-lucide="file-down" aria-hidden="true"></i>导出 CSV</button>
           </div>
           <div class="filter-summary"><span>共 <strong id="recordResultCount">0</strong> 条结果</span><span>全部 <b id="recordsCount">0</b> · 本周期 <b id="cycleRecordsCount">0</b></span></div>
           <div class="records-table" id="recordsTable"></div>
@@ -164,18 +166,19 @@
               </form>
             </article>
             <article class="panel data-panel">
-              <div class="panel-heading"><div><p class="eyebrow">LOCAL DATA</p><h3>数据与权限</h3></div><i data-lucide="shield-check" aria-hidden="true"></i></div>
-              <div class="data-note"><strong>当前模式：浏览器本地保存</strong><span>GitHub Pages 没有文件写入能力，记录和图片不会自动上传服务器。换设备前，请先导出完整备份。</span></div>
-              <div class="data-actions"><button class="button button-outline admin-only" data-action="export" type="button"><i data-lucide="download" aria-hidden="true"></i>导出完整备份</button><button class="button button-outline admin-only" data-action="export-csv" type="button"><i data-lucide="file-down" aria-hidden="true"></i>导出记录 CSV</button><button class="button button-outline admin-only" data-action="import" type="button"><i data-lucide="upload" aria-hidden="true"></i>导入备份</button><input type="file" id="importFile" accept="application/json" hidden /></div>
+              <div class="panel-heading"><div><p class="eyebrow">CLOUD DATA</p><h3>数据与权限</h3></div><i data-lucide="shield-check" aria-hidden="true"></i></div>
+              <div class="data-note"><strong id="cloudModeTitle">正在检查云端连接</strong><span id="cloudModeDescription">本机缓存会继续保留，Supabase 初始化完成后自动启用跨设备同步。</span></div>
+              <div class="cloud-sync-line"><span class="cloud-sync-dot" id="cloudSyncDot"></span><div><strong id="cloudSyncStatus">连接检查中</strong><small id="cloudSyncDetail">正在连接 Supabase</small></div></div>
+              <div class="data-actions"><button class="button button-primary" id="migrateCloudButton" data-action="migrate-cloud" type="button" hidden><i data-lucide="cloud-upload" aria-hidden="true"></i>迁移本机数据到云端</button><button class="button button-outline admin-only" data-action="export" type="button" hidden><i data-lucide="download" aria-hidden="true"></i>导出完整备份</button><button class="button button-outline admin-only" data-action="export-csv" type="button" hidden><i data-lucide="file-down" aria-hidden="true"></i>导出记录 CSV</button><button class="button button-outline admin-only" data-action="import" type="button" hidden><i data-lucide="upload" aria-hidden="true"></i>导入备份</button><input type="file" id="importFile" accept="application/json" hidden /></div>
               <div class="session-note"><i data-lucide="timer-reset" aria-hidden="true"></i><span>页面刷新、重新进入或 30 分钟无操作后都会重新锁定。</span></div>
               <div class="divider"></div>
-              <button class="text-button admin-only" data-action="change-password" type="button"><i data-lucide="key-round" aria-hidden="true"></i>修改当前身份密码</button>
-              <button class="text-button danger-link admin-only" data-action="logout" type="button"><i data-lucide="log-out" aria-hidden="true"></i>退出并锁定</button>
+              <button class="text-button admin-only" data-action="change-password" type="button" hidden><i data-lucide="key-round" aria-hidden="true"></i>修改当前身份密码</button>
+              <button class="text-button danger-link admin-only" data-action="logout" type="button" hidden><i data-lucide="log-out" aria-hidden="true"></i>退出并锁定</button>
             </article>
           </div>
         </section>
 
-        <footer class="site-footer"><span>Made for two, with intention.</span><span>数据保存在此浏览器</span></footer>
+        <footer class="site-footer"><span>Made for two, with intention.</span><span id="footerDataStatus">数据保存在此浏览器</span></footer>
       </main>
     </div>
 
@@ -183,9 +186,9 @@
       <div class="modal-card auth-card" role="dialog" aria-modal="true" aria-labelledby="authTitle">
         <button class="modal-close" data-close-modal="authModal" type="button" aria-label="关闭"><i data-lucide="x" aria-hidden="true"></i></button>
         <div class="modal-icon"><i data-lucide="users-round" aria-hidden="true"></i></div>
-        <p class="eyebrow">IDENTITY ACCESS</p><h2 id="authTitle">选择身份并解锁</h2><p class="modal-description">方方负责记录，路路小皇帝负责复核。刷新或重新进入页面后需要再次输入密码。</p>
+        <p class="eyebrow">IDENTITY ACCESS</p><h2 id="authTitle">选择身份并解锁</h2><p class="modal-description" id="authDescription">方方负责记录，路路小皇帝负责复核。刷新或重新进入页面后需要再次输入密码。</p>
         <div class="role-selector"><button class="role-option is-selected" data-login-role="recorder" type="button"><i data-lucide="pen-line"></i><strong>方方</strong><span>记录者</span></button><button class="role-option" data-login-role="reviewer" type="button"><i data-lucide="crown"></i><strong>路路小皇帝</strong><span>复核者</span></button></div>
-        <form id="authForm" class="form-stack"><input id="loginRole" type="hidden" value="recorder" /><label>身份密码<input id="passwordInput" type="password" inputmode="numeric" autocomplete="current-password" placeholder="输入 8 位密码" required /></label><p class="form-error" id="authError" hidden>密码不正确，请重试。</p><button class="button button-primary button-full" type="submit">解锁当前身份 <i data-lucide="arrow-right" aria-hidden="true"></i></button><button class="auth-reset-button" data-action="reset-password" type="button"><i data-lucide="rotate-ccw-key" aria-hidden="true"></i><span>重置当前身份为初始密码</span></button><small class="auth-reset-note">只重置当前浏览器中的密码，不会删除记录或图片。</small></form>
+        <form id="authForm" class="form-stack"><input id="loginRole" type="hidden" value="recorder" /><label>身份密码<input id="passwordInput" type="password" inputmode="numeric" autocomplete="current-password" placeholder="输入身份密码" required /></label><p class="form-error" id="authError" hidden>密码不正确，请重试。</p><button class="button button-primary button-full" id="authSubmitButton" type="submit">解锁当前身份 <i data-lucide="arrow-right" aria-hidden="true"></i></button><button class="auth-reset-button" id="localPasswordResetButton" data-action="reset-password" type="button"><i data-lucide="rotate-ccw-key" aria-hidden="true"></i><span>重置当前身份为初始密码</span></button><small class="auth-reset-note" id="localPasswordResetNote">只重置当前浏览器中的密码，不会删除记录或图片。</small></form>
       </div>
     </div>
 
@@ -193,7 +196,7 @@
       <div class="modal-card large-modal" role="dialog" aria-modal="true" aria-labelledby="momentModalTitle">
         <button class="modal-close" data-close-modal="momentModal" type="button" aria-label="关闭"><i data-lucide="x" aria-hidden="true"></i></button>
         <p class="eyebrow">BEAUTIFUL DAYS</p><h2 id="momentModalTitle">记录一件美好小事</h2>
-        <form id="momentForm" class="form-grid"><input id="momentId" type="hidden" /><label>日期<input id="momentDate" type="date" required /></label><label>标题<input id="momentTitle" type="text" maxlength="60" placeholder="今天值得记住的事" required /></label><label class="span-2">记录<textarea id="momentNote" rows="4" maxlength="500" placeholder="写下当时的心情和细节"></textarea></label><label class="span-2 image-upload-field"><span>照片（最多 4 张）</span><input id="momentImages" type="file" accept="image/*" multiple /><small>会自动压缩并只保存在当前浏览器。</small></label><div class="image-preview-grid span-2" id="momentImagePreview"></div><div class="modal-form-actions span-2"><button class="button button-outline" data-close-modal="momentModal" type="button">取消</button><button class="button button-primary" type="submit"><i data-lucide="save"></i>保存美好</button></div></form>
+        <form id="momentForm" class="form-grid"><input id="momentId" type="hidden" /><label>日期<input id="momentDate" type="date" required /></label><label>标题<input id="momentTitle" type="text" maxlength="60" placeholder="今天值得记住的事" required /></label><label class="span-2">记录<textarea id="momentNote" rows="4" maxlength="500" placeholder="写下当时的心情和细节"></textarea></label><label class="span-2 image-upload-field"><span>照片（最多 4 张）</span><input id="momentImages" type="file" accept="image/*" multiple /><small id="momentStorageNote">会自动压缩并保存在当前浏览器。</small></label><div class="image-preview-grid span-2" id="momentImagePreview"></div><div class="modal-form-actions span-2"><button class="button button-outline" data-close-modal="momentModal" type="button">取消</button><button class="button button-primary" type="submit"><i data-lucide="save"></i>保存美好</button></div></form>
       </div>
     </div>
 
@@ -224,7 +227,7 @@
     <div class="modal-backdrop" id="passwordModal" hidden>
       <div class="modal-card auth-card" role="dialog" aria-modal="true" aria-labelledby="passwordModalTitle">
         <button class="modal-close" data-close-modal="passwordModal" type="button" aria-label="关闭"><i data-lucide="x" aria-hidden="true"></i></button>
-        <div class="modal-icon"><i data-lucide="key-round" aria-hidden="true"></i></div><p class="eyebrow">SECURITY</p><h2 id="passwordModalTitle">修改管理员密码</h2><p class="modal-description">新密码只保存在当前浏览器。请同时记在安全的地方。</p>
+        <div class="modal-icon"><i data-lucide="key-round" aria-hidden="true"></i></div><p class="eyebrow">SECURITY</p><h2 id="passwordModalTitle">修改身份密码</h2><p class="modal-description" id="passwordDescription">新密码只保存在当前浏览器。请同时记在安全的地方。</p>
         <form id="passwordForm" class="form-stack"><label>当前密码<input id="currentPassword" type="password" required /></label><label>新密码<input id="newPassword" type="password" minlength="8" required /></label><label>再次输入新密码<input id="confirmPassword" type="password" minlength="8" required /></label><p class="form-error" id="passwordError" hidden></p><button class="button button-primary button-full" type="submit">保存新密码 <i data-lucide="check" aria-hidden="true"></i></button></form>
       </div>
     </div>

@@ -285,6 +285,14 @@ input:not(:disabled):focus, select:not(:disabled):focus, textarea:not(:disabled)
 .data-note { display: grid; gap: 7px; margin: 22px 0; padding: 14px; background: #fbfaf6; border-radius: 12px; }
 .data-note strong { font-size: 12px; }
 .data-note span { color: var(--ink-soft); font-size: 11px; line-height: 1.55; }
+.cloud-sync-line { display: flex; align-items: center; gap: 10px; margin: 0 0 16px; }
+.cloud-sync-line > div { display: grid; gap: 2px; }
+.cloud-sync-line strong { font-size: 11px; }
+.cloud-sync-line small { color: var(--ink-soft); font-size: 10px; }
+.cloud-sync-dot { width: 9px; height: 9px; flex: 0 0 auto; border-radius: 50%; background: #a8b1b7; box-shadow: 0 0 0 4px rgba(168,177,183,.14); }
+.cloud-sync-dot.is-ready { background: var(--mint-deep); box-shadow: 0 0 0 4px rgba(28,142,129,.12); }
+.cloud-sync-dot.is-busy { background: #d59b3b; box-shadow: 0 0 0 4px rgba(213,155,59,.13); }
+.cloud-sync-dot.is-error { background: var(--coral); box-shadow: 0 0 0 4px rgba(225,116,91,.13); }
 .data-actions { display: flex; gap: 8px; }
 .data-actions { flex-wrap: wrap; }
 .session-note { display: flex; align-items: center; gap: 8px; margin-top: 14px; color: var(--ink-soft); font-size: 10px; }
