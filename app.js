@@ -5,9 +5,16 @@ const PASSWORD_HASH_KEYS = {
 };
 const LOCAL_ROLE_CACHE_KEY = "lulu-fangfang-active-local-role";
 const CLOUD_AUTH_STORAGE_KEY = "lulu-fangfang-supabase-auth";
-const DATA_VERSION = 5;
+const DATA_VERSION = 6;
 const CLOUD_CONFIG = window.LULU_FANGFANG_CLOUD_CONFIG || null;
 const RECORD_STATUSES = ["未办", "进行中", "已办"];
+const LEGACY_WISH_PRESET = new Map([
+  ["wish-1", "她挑的一餐，我全程安排"],
+  ["wish-2", "全程承担家务半天"],
+  ["wish-3", "肩颈放松 20 分钟"],
+  ["wish-4", "陪她安排一项喜欢的活动"],
+  ["wish-5", "她自定义一份心愿"],
+]);
 const DEFAULT_PASSWORD_HASHES = {
   recorder: { sha256: "9a0dd7ba868524e126086edda337dac92c8b4363a115edc709e8b3523a95a696", fallback: "5d45f3cfd18d6d87198fb2e795e11db1" },
   reviewer: { sha256: "d1228b0c90170b196f6955986a61382313cf9f1f4c6cd919177eea6e772ea9bc", fallback: "06607d4fd0331b79024198e717d3c5af" },
@@ -22,11 +29,8 @@ const defaultData = {
   },
   records: [],
   wishes: [
-    { id: "wish-1", title: "她挑的一餐，我全程安排", description: "选餐厅、订位和行程都由我负责。" },
-    { id: "wish-2", title: "全程承担家务半天", description: "让她安心休息，家里事务由我完成。" },
-    { id: "wish-3", title: "肩颈放松 20 分钟", description: "以她舒服为准，随时可以暂停。" },
-    { id: "wish-4", title: "陪她安排一项喜欢的活动", description: "由她决定内容和时间。" },
-    { id: "wish-5", title: "她自定义一份心愿", description: "双方确认内容后再登记兑换。" },
+    { id: "wish-massage", title: "按摩", description: "" },
+    { id: "wish-guji", title: "咕叽咕叽", description: "" },
   ],
   redemptions: [],
   moments: [],
@@ -78,9 +82,18 @@ function clone(value) {
 
 function normalizeData(saved) {
   if (!saved) return clone(defaultData);
-  const wishes = Array.isArray(saved.wishes) && saved.wishes.length
+  const savedWishes = Array.isArray(saved.wishes)
     ? saved.wishes.map((wish) => ({ ...wish, description: wish.description || "" }))
-    : clone(defaultData.wishes);
+    : [];
+  let wishes = savedWishes.length ? savedWishes : clone(defaultData.wishes);
+  if ((Number(saved.version) || 0) < DATA_VERSION && savedWishes.length) {
+    const customWishes = savedWishes.filter((wish) => LEGACY_WISH_PRESET.get(wish.id) !== wish.title);
+    const presetWishes = clone(defaultData.wishes);
+    wishes = [
+      ...presetWishes,
+      ...customWishes.filter((wish) => !presetWishes.some((preset) => preset.id === wish.id || preset.title === wish.title)),
+    ];
+  }
   const migratedRedemptions = Array.isArray(saved.redemptions)
     ? saved.redemptions
     : wishes.filter((wish) => wish.redeemedAt).map((wish, index) => ({
