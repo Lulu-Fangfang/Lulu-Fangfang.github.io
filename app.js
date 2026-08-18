@@ -5,9 +5,11 @@ const PASSWORD_HASH_KEYS = {
 };
 const LOCAL_ROLE_CACHE_KEY = "lulu-fangfang-active-local-role";
 const CLOUD_AUTH_STORAGE_KEY = "lulu-fangfang-supabase-auth";
-const DATA_VERSION = 6;
+const DATA_VERSION = 7;
 const CLOUD_CONFIG = window.LULU_FANGFANG_CLOUD_CONFIG || null;
 const RECORD_STATUSES = ["未办", "进行中", "已办"];
+const QIXI_DATE = "2026-08-19";
+const QIXI_PREVIEW = new URLSearchParams(location.search).get("qixi-preview") === "1";
 const LEGACY_WISH_PRESET = new Map([
   ["wish-1", "她挑的一餐，我全程安排"],
   ["wish-2", "全程承担家务半天"],
@@ -36,6 +38,7 @@ const defaultData = {
   moments: [],
   tasks: [],
   issues: [],
+  qixiCheckins: {},
 };
 
 let data = loadData();
@@ -58,6 +61,8 @@ let cloudSyncDetail = "正在连接 Supabase";
 let pendingLocalMigration = null;
 let applyingRemoteState = false;
 let loveCelebrationTimer = null;
+let qixiDateTaps = [];
+let qixiBrandTaps = [];
 
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => [...document.querySelectorAll(selector)];
@@ -65,6 +70,18 @@ const today = () => {
   const date = new Date();
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
 };
+const dateInChina = () => {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "Asia/Shanghai",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(new Date());
+  const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return `${values.year}-${values.month}-${values.day}`;
+};
+const isQixiDay = () => dateInChina() === QIXI_DATE;
+const isQixiActive = () => QIXI_PREVIEW || isQixiDay();
 const currentTime = () => {
   const date = new Date();
   return `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
@@ -134,6 +151,7 @@ function normalizeData(saved) {
     moments: Array.isArray(saved.moments) ? saved.moments.map((moment) => ({ imageIds: [], reviewStatus: "待复核", reviewedAt: "", createdBy: "recorder", ...moment, time: moment.time || timeFromIso(moment.createdAt) })) : [],
     tasks: Array.isArray(saved.tasks) ? saved.tasks.map((task) => ({ createdBy: "recorder", ...task, done: Boolean(task.done), reviewed: Boolean(task.reviewed), reviewedAt: task.reviewedAt || "", createdAt: task.createdAt || `${task.date || "1970-01-01"}T00:00:00.000Z` })) : [],
     issues: Array.isArray(saved.issues) ? saved.issues.map((issue) => ({ status: "待沟通", reviewedAt: "", proposal: "", createdBy: "recorder", ...issue, time: issue.time || timeFromIso(issue.createdAt) })) : [],
+    qixiCheckins: saved.qixiCheckins && typeof saved.qixiCheckins === "object" ? saved.qixiCheckins : {},
   };
 }
 
@@ -946,6 +964,114 @@ function renderSettings() {
     : cloudConfigured ? "云端私密模式" : "本地私密模式";
 }
 
+function qixiBothCheckedIn() {
+  if (QIXI_PREVIEW) return true;
+  const checkins = data.qixiCheckins?.[QIXI_DATE] || {};
+  return Boolean(checkins.recorder && checkins.reviewer);
+}
+
+function renderQixi() {
+  const active = isQixiActive();
+  document.body.classList.toggle("qixi-active", active);
+  document.body.dataset.qixiDate = dateInChina();
+  document.body.dataset.qixiPreview = QIXI_PREVIEW ? "true" : "false";
+  $("#qixiMessage").hidden = !active;
+  $("#qixiSharedLetter").hidden = !(active && qixiBothCheckedIn());
+  $("#todayNote").textContent = active ? "今夕有你，朝夕都是七夕" : "今天也一起好好生活";
+  const dateLabel = $("#todayLabel");
+  if (active) {
+    dateLabel.setAttribute("role", "button");
+    dateLabel.setAttribute("tabindex", "0");
+    dateLabel.setAttribute("aria-label", "七夕日期彩蛋");
+  } else {
+    dateLabel.removeAttribute("role");
+    dateLabel.removeAttribute("tabindex");
+    dateLabel.removeAttribute("aria-label");
+  }
+}
+
+function registerQixiCheckin(role) {
+  if (QIXI_PREVIEW || !isQixiDay() || !["recorder", "reviewer"].includes(role)) return;
+  const existing = data.qixiCheckins?.[QIXI_DATE] || {};
+  if (existing[role]) return;
+  data.qixiCheckins = {
+    ...(data.qixiCheckins || {}),
+    [QIXI_DATE]: { ...existing, [role]: new Date().toISOString() },
+  };
+  saveData().then((result) => {
+    renderQixi();
+    refreshIcons();
+    if (result === "failed") toast("七夕到访已保存在本机，云端恢复后会再次同步");
+  });
+}
+
+function openQixiOverlay(id) {
+  if (!isQixiActive()) return;
+  const overlay = document.getElementById(id);
+  if (!overlay) return;
+  $$(".qixi-overlay:not([hidden])").forEach((item) => {
+    if (item !== overlay) closeModal(item.id);
+  });
+  overlay.classList.remove("is-active");
+  overlay.hidden = false;
+  document.body.classList.add("qixi-overlay-open");
+  void overlay.offsetWidth;
+  overlay.classList.add("is-active");
+  refreshIcons();
+}
+
+function populateQixiBridgeStars() {
+  const field = $("#qixiBridgeStars");
+  if (!field || field.childElementCount) return;
+  const colors = ["#ffd166", "#fff4cf", "#f2a38f", "#7bd3ca"];
+  const count = window.matchMedia("(prefers-reduced-motion: reduce)").matches ? 24 : 52;
+  for (let index = 0; index < count; index += 1) {
+    const star = document.createElement("span");
+    star.className = "qixi-bridge-star";
+    star.style.setProperty("--qixi-x", `${3 + Math.random() * 94}%`);
+    star.style.setProperty("--qixi-y", `${3 + Math.random() * 90}%`);
+    star.style.setProperty("--qixi-size", `${8 + Math.random() * 18}px`);
+    star.style.setProperty("--qixi-color", colors[index % colors.length]);
+    star.style.setProperty("--qixi-delay", `${Math.random() * 1.8}s`);
+    star.innerHTML = `<i data-lucide="${index % 4 === 0 ? "sparkles" : "star"}" aria-hidden="true"></i>`;
+    field.appendChild(star);
+  }
+}
+
+function showQixiBridge() {
+  populateQixiBridgeStars();
+  openQixiOverlay("qixiBridge");
+}
+
+function showQixiPhotoLetter() {
+  openQixiOverlay("qixiPhotoLetter");
+}
+
+function showQixiTogether() {
+  if (!qixiBothCheckedIn()) return;
+  openQixiOverlay("qixiTogether");
+}
+
+function recordQixiTap(kind) {
+  if (!isQixiActive()) return;
+  const now = Date.now();
+  if (kind === "date") {
+    qixiDateTaps = qixiDateTaps.filter((timestamp) => now - timestamp <= 5000);
+    qixiDateTaps.push(now);
+    if (qixiDateTaps.length >= 7) {
+      qixiDateTaps = [];
+      showQixiBridge();
+    }
+    return;
+  }
+  qixiBrandTaps = qixiBrandTaps.filter((timestamp) => now - timestamp <= 2500);
+  qixiBrandTaps.push(now);
+  if (qixiBrandTaps.length >= 3) {
+    qixiBrandTaps = [];
+    showQixiPhotoLetter();
+  }
+}
+
 function renderView() {
   const validViews = ["overview", "daily", "records", "issues", "wishes", "settings"];
   if (!validViews.includes(activeView)) activeView = "overview";
@@ -969,6 +1095,7 @@ function render() {
   renderWishes();
   renderRedemptions();
   renderSettings();
+  renderQixi();
   renderView();
   refreshIcons();
 }
@@ -979,7 +1106,7 @@ function refreshIcons() {
 
 function setView(view) {
   activeView = view;
-  history.replaceState(null, "", `#${view}`);
+  history.replaceState(null, "", `${location.pathname}${location.search}#${view}`);
   renderView();
   window.scrollTo({ top: 0, behavior: "smooth" });
 }
@@ -995,7 +1122,13 @@ function openModal(id) {
 
 function closeModal(id) {
   const modal = document.getElementById(id);
-  if (modal) modal.hidden = true;
+  if (modal) {
+    modal.hidden = true;
+    modal.classList.remove("is-active");
+    if (modal.classList.contains("qixi-overlay") && !$(".qixi-overlay:not([hidden])")) {
+      document.body.classList.remove("qixi-overlay-open");
+    }
+  }
 }
 
 function requireAdmin(action) {
@@ -1084,13 +1217,16 @@ function showHeartFirework(x, y) {
   burst.style.setProperty("--burst-x", `${x}px`);
   burst.style.setProperty("--burst-y", `${y}px`);
   burst.innerHTML = '<span class="heart-firework-ring"></span>';
-  const colors = ["#ee7c68", "#f2a38f", "#d69c25", "#0f817c", "#f5c8bd"];
+  const qixi = isQixiActive();
+  const colors = qixi
+    ? ["#ee7c68", "#f2a38f", "#ffd166", "#fff4cf", "#0f817c", "#f5c8bd"]
+    : ["#ee7c68", "#f2a38f", "#d69c25", "#0f817c", "#f5c8bd"];
   const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-  const particleCount = reducedMotion ? 8 : 18;
+  const particleCount = reducedMotion ? 8 : qixi ? 30 : 18;
   const angleOffset = Math.random() * Math.PI;
   for (let index = 0; index < particleCount; index += 1) {
     const angle = angleOffset + (Math.PI * 2 * index) / particleCount;
-    const distance = (reducedMotion ? 34 : 58) + Math.random() * (reducedMotion ? 24 : 62);
+    const distance = (reducedMotion ? 34 : qixi ? 70 : 58) + Math.random() * (reducedMotion ? 24 : qixi ? 78 : 62);
     const particle = document.createElement("span");
     particle.className = "heart-firework-particle";
     particle.style.setProperty("--firework-x", `${Math.cos(angle) * distance}px`);
@@ -1099,8 +1235,15 @@ function showHeartFirework(x, y) {
     particle.style.setProperty("--firework-color", colors[index % colors.length]);
     particle.style.setProperty("--firework-delay", `${Math.random() * .08}s`);
     particle.style.setProperty("--firework-rotation", `${-130 + Math.random() * 260}deg`);
-    particle.innerHTML = `<i data-lucide="${index % 4 === 0 ? "star" : "heart"}" aria-hidden="true"></i>`;
+    const icon = qixi && index % 6 === 0 ? "sparkles" : index % 4 === 0 ? "star" : "heart";
+    particle.innerHTML = `<i data-lucide="${icon}" aria-hidden="true"></i>`;
     burst.appendChild(particle);
+  }
+  if (qixi && !reducedMotion) {
+    const sign = document.createElement("span");
+    sign.className = "heart-firework-sign";
+    sign.textContent = "L × F";
+    burst.appendChild(sign);
   }
   layer.appendChild(burst);
   layer.hidden = false;
@@ -1154,6 +1297,7 @@ function unlock(role, { restored = false } = {}) {
   closeModal("authModal");
   $("#passwordInput").value = "";
   $("#authError").hidden = true;
+  registerQixiCheckin(role);
   render();
   if (!restored) {
     setView(role === "recorder" ? "daily" : "overview");
@@ -1458,6 +1602,7 @@ document.addEventListener("click", async (event) => {
   if (action === "import") importBackup();
   if (action === "migrate-cloud") await migrateLocalDataToCloud();
   if (action === "sync-cloud") await syncCloudNow();
+  if (action === "qixi-together") showQixiTogether();
   if (action === "logout") await logout();
   if (action === "reset-password" && !cloudSchemaReady && confirm("只重置当前所选身份在这个浏览器中的密码，不会删除数据。确定继续吗？")) resetLocalPassword();
   if (action === "change-password" && requireAdmin("修改密码")) {
@@ -1467,6 +1612,14 @@ document.addEventListener("click", async (event) => {
 });
 
 $("#adminButton").addEventListener("click", () => isAdmin ? setView("settings") : openModal("authModal"));
+
+$("#todayLabel").addEventListener("click", () => recordQixiTap("date"));
+$("#todayLabel").addEventListener("keydown", (event) => {
+  if (!isQixiActive() || !["Enter", " "].includes(event.key)) return;
+  event.preventDefault();
+  recordQixiTap("date");
+});
+$(".brand").addEventListener("click", () => recordQixiTap("brand"));
 
 document.addEventListener("click", (event) => {
   if (!isAdmin || !isReviewer()) return;
@@ -1692,11 +1845,13 @@ window.addEventListener("online", async () => {
   }
 });
 document.addEventListener("keydown", (event) => {
-  if (event.key === "Escape") $$(".modal-backdrop:not([hidden])").forEach((modal) => { modal.hidden = true; });
+  if (event.key === "Escape") {
+    $$(".modal-backdrop:not([hidden]), .qixi-overlay:not([hidden])").forEach((modal) => closeModal(modal.id));
+  }
 });
 
 async function initialize() {
-  $("#todayLabel").textContent = formatDate(today());
+  $("#todayLabel").textContent = formatDate(dateInChina());
   $("#taskDateFilter").value = today();
   await hydrateMediaCache();
   render();

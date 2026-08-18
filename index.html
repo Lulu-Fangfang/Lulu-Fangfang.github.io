@@ -10,11 +10,11 @@
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Noto+Sans+SC:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
-    <link rel="stylesheet" href="styles.css?v=20260818-7" />
+    <link rel="stylesheet" href="styles.css?v=20260818-8" />
     <script src="https://unpkg.com/lucide@latest" defer></script>
     <script src="supabase-config.js?v=20260817-9" defer></script>
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.112.3/dist/umd/supabase.min.js" defer></script>
-    <script src="app.js?v=20260818-5" defer></script>
+    <script src="app.js?v=20260818-6" defer></script>
   </head>
   <body>
     <div class="photo-backdrop" aria-hidden="true">
@@ -46,6 +46,7 @@
             <p class="eyebrow">OUR EVERYDAY, TOGETHER</p>
             <h1>把两个人的日常，<br /><em>认真过成我们的故事。</em></h1>
             <p class="welcome-promise">小檀永远都爱路路小皇帝，路路永远都是方方的小皇帝。</p>
+            <p class="qixi-message" id="qixiMessage" hidden><i data-lucide="star" aria-hidden="true"></i>今夕有你，朝夕都是七夕。</p>
             <p class="welcome-description">收藏美好、安排计划、认真沟通，也把每一份想实现的心愿留在这里。</p>
           </div>
           <div class="today-card">
@@ -66,6 +67,11 @@
 
         <section class="view is-visible" id="overviewView" data-view-panel="overview">
           <div class="overview-heading"><div><p class="eyebrow">OUR SHARED SPACE</p><h2>我们的小站</h2></div><p>三个模块各自记录一件事，入口和状态一眼就能分清。</p></div>
+          <button class="qixi-sealed-letter" id="qixiSharedLetter" data-action="qixi-together" type="button" hidden>
+            <span class="qixi-sealed-icon"><i data-lucide="mail-heart" aria-hidden="true"></i></span>
+            <span><small>七夕 · 双向奔赴</small><strong>今天我们都来过这里</strong></span>
+            <i data-lucide="arrow-right" aria-hidden="true"></i>
+          </button>
           <div class="module-hub">
             <button class="module-hub-item module-hub-daily" data-view-target="daily" type="button"><span class="module-hub-icon"><i data-lucide="images" aria-hidden="true"></i></span><span class="module-hub-copy"><small>01 · BEAUTIFUL DAYS</small><strong>日常美好</strong><span class="module-hub-purpose">生活照片与每日手账</span><span class="module-hub-summary" id="hubDailySummary">美好 0 条 · 今日手账 0 项</span></span><i class="module-hub-arrow" data-lucide="arrow-right" aria-hidden="true"></i></button>
             <button class="module-hub-item module-hub-records" data-view-target="records" type="button"><span class="module-hub-icon"><i data-lucide="list-checks" aria-hidden="true"></i></span><span class="module-hub-copy"><small>02 · ACTION LEDGER</small><strong>事务记录台账</strong><span class="module-hub-purpose">待办、进行中与已办事项</span><span class="module-hub-summary" id="hubRecordSummary">待办 0 项 · 已办 0 项</span></span><i class="module-hub-arrow" data-lucide="arrow-right" aria-hidden="true"></i></button>
@@ -244,6 +250,33 @@
         <form id="passwordForm" class="form-stack"><label>当前密码<input id="currentPassword" type="password" required /></label><label>新密码<input id="newPassword" type="password" minlength="8" required /></label><label>再次输入新密码<input id="confirmPassword" type="password" minlength="8" required /></label><p class="form-error" id="passwordError" hidden></p><button class="button button-primary button-full" type="submit">保存新密码 <i data-lucide="check" aria-hidden="true"></i></button></form>
       </div>
     </div>
+
+    <section class="qixi-overlay qixi-bridge" id="qixiBridge" aria-label="鹊桥相会彩蛋" hidden>
+      <button class="qixi-overlay-close" data-close-modal="qixiBridge" type="button" aria-label="关闭鹊桥彩蛋" title="关闭"><i data-lucide="x" aria-hidden="true"></i></button>
+      <div class="qixi-bridge-stars" id="qixiBridgeStars" aria-hidden="true"></div>
+      <span class="qixi-bridge-heart qixi-bridge-heart-left" aria-hidden="true"><i data-lucide="heart"></i></span>
+      <span class="qixi-bridge-heart qixi-bridge-heart-right" aria-hidden="true"><i data-lucide="heart"></i></span>
+      <div class="qixi-bridge-copy"><p>七夕 · 鹊桥相会</p><strong>小檀永远都爱路路小皇帝</strong><span>路路永远都是方方的小皇帝</span></div>
+    </section>
+
+    <section class="qixi-overlay qixi-photo-letter" id="qixiPhotoLetter" aria-label="七夕照片情书" hidden>
+      <button class="qixi-overlay-close" data-close-modal="qixiPhotoLetter" type="button" aria-label="关闭照片情书" title="关闭"><i data-lucide="x" aria-hidden="true"></i></button>
+      <div class="qixi-photo-letter-inner">
+        <div class="qixi-photo-letter-heading"><p>QIXI PHOTO LETTER</p><h2>我们的四个瞬间</h2></div>
+        <div class="qixi-photo-letter-grid">
+          <figure><img src="assets/backboard-bg-1.jpg" alt="路路与方方的合照一" /><figcaption><b>01</b><span>遇见你，是故事的开始。</span></figcaption></figure>
+          <figure><img src="assets/backboard-bg-2.jpg" alt="路路与方方的合照二" /><figcaption><b>02</b><span>每一次靠近，都值得珍藏。</span></figcaption></figure>
+          <figure><img src="assets/backboard-bg-3.jpg" alt="路路与方方的合照三" /><figcaption><b>03</b><span>平凡的日常，也因为你闪闪发亮。</span></figcaption></figure>
+          <figure><img src="assets/backboard-bg-4.jpg" alt="路路与方方的合照四" /><figcaption><b>04</b><span>往后的每一年，都一起过。</span></figcaption></figure>
+        </div>
+      </div>
+    </section>
+
+    <section class="qixi-overlay qixi-together" id="qixiTogether" aria-label="双向奔赴七夕彩蛋" hidden>
+      <button class="qixi-overlay-close" data-close-modal="qixiTogether" type="button" aria-label="关闭双向奔赴彩蛋" title="关闭"><i data-lucide="x" aria-hidden="true"></i></button>
+      <div class="qixi-together-mark" aria-hidden="true"><i data-lucide="heart-handshake"></i></div>
+      <p>路路 × 方方</p><h2>今天我们都来过这里</h2><span>两个人在同一天打开了这个小家，鹊桥已经点亮。</span>
+    </section>
 
     <div class="heart-fireworks" id="heartFireworks" aria-hidden="true" hidden></div>
     <div class="love-celebration" id="loveCelebration" aria-live="polite" hidden>
