@@ -46,6 +46,7 @@ a { color: inherit; text-decoration: none; }
 .welcome-copy .eyebrow { color: #9dcfc7; }
 .welcome-copy h1 { font-size: 48px; line-height: 1.16; letter-spacing: 0; margin: 14px 0 14px; }
 .welcome-copy h1 em { color: #f3ad94; font-style: normal; }
+.welcome-promise { max-width: 590px; margin: 0 0 12px; padding-left: 12px; border-left: 2px solid #f3ad94; color: #fff; font-size: 15px; font-weight: 700; line-height: 1.65; letter-spacing: 0; }
 .welcome-description { color: rgba(255,255,255,.72); margin: 0; font-size: 14px; }
 .today-card { min-width: 168px; align-self: flex-end; display: grid; align-content: end; gap: 5px; padding: 18px 20px; border-left: 1px solid rgba(255,255,255,.2); position: relative; z-index: 1; }
 .today-label { color: #9dcfc7; font: 500 10px "DM Mono", monospace; letter-spacing: .12em; }
@@ -401,6 +402,7 @@ input:not(:disabled):focus, select:not(:disabled):focus, textarea:not(:disabled)
   .button-quiet { width: 38px; height: 38px; padding: 0; background: rgba(23,49,73,.06); }
   .welcome-strip { padding: 28px 23px 24px; min-height: 310px; display: flex; flex-direction: column; justify-content: space-between; gap: 24px; }
   .welcome-copy h1 { font-size: 30px; margin-top: 12px; }
+  .welcome-promise { font-size: 13px; line-height: 1.7; }
   .welcome-description { font-size: 12px; line-height: 1.65; max-width: 280px; }
   .today-card { align-self: stretch; min-width: 0; padding: 14px 0 0; border-left: 0; border-top: 1px solid rgba(255,255,255,.2); display: flex; align-items: baseline; gap: 9px; }
   .today-card strong { font-size: 18px; }
