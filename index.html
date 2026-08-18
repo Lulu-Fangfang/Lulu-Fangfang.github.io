@@ -10,11 +10,11 @@
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Noto+Sans+SC:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
-    <link rel="stylesheet" href="styles.css?v=20260817-10" />
+    <link rel="stylesheet" href="styles.css?v=20260818-2" />
     <script src="https://unpkg.com/lucide@latest" defer></script>
     <script src="supabase-config.js?v=20260817-9" defer></script>
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.112.3/dist/umd/supabase.min.js" defer></script>
-    <script src="app.js?v=20260817-10" defer></script>
+    <script src="app.js?v=20260818-2" defer></script>
   </head>
   <body>
     <div class="app-shell">
@@ -67,11 +67,11 @@
           <div class="stats-grid">
             <article class="stat-card stat-card-dark">
               <div class="stat-icon"><i data-lucide="message-circle-heart" aria-hidden="true"></i></div>
-              <div><span>本周期已办</span><strong id="statRecords">0</strong><small id="statPeriod">从本周期开始计算</small></div>
+              <div><span>本周期问题</span><strong id="statRecords">0</strong><small id="statPeriod">从本周期开始计算</small></div>
             </article>
             <article class="stat-card stat-card-mint">
               <div class="stat-icon"><i data-lucide="ticket-check" aria-hidden="true"></i></div>
-              <div><span>可兑换心愿</span><strong id="statAvailable">0</strong><small id="statThreshold">每 3 项已办兑换 1 份</small></div>
+              <div><span>可兑换心愿</span><strong id="statAvailable">0</strong><small id="statThreshold">每 1 项沟通问题兑换 1 份</small></div>
             </article>
             <article class="stat-card stat-card-coral">
               <div class="stat-icon"><i data-lucide="hand-heart" aria-hidden="true"></i></div>
@@ -86,7 +86,7 @@
           <div class="dashboard-grid">
             <article class="panel progress-panel">
               <div class="panel-heading"><div><p class="eyebrow">NEXT LITTLE THING</p><h2>下一份心愿</h2></div><span class="panel-kicker" id="progressKicker">0 / 3</span></div>
-              <div class="progress-copy"><strong id="progressHeadline">还差 3 项已办</strong><span id="progressSubline">把一件约定认真做完，就离心愿更近一点。</span></div>
+              <div class="progress-copy"><strong id="progressHeadline">还差 1 项沟通问题</strong><span id="progressSubline">每记录一项需要沟通的问题，就获得 1 份心愿额度。</span></div>
               <div class="progress-track" aria-label="兑换进度"><span id="progressBar"></span></div>
               <div class="progress-meta"><span id="progressStart">本周期起点 --</span><span id="progressHint">继续加油</span></div>
               <div class="balance-strip">
@@ -132,14 +132,14 @@
         </section>
 
         <section class="view" id="recordsView" data-view-panel="records" hidden>
-          <div class="view-heading"><div><p class="eyebrow">SHARED ACTION LEDGER</p><h2>事务记录台账</h2><p>像 Todo List 一样记录共同约定、行动计划和完成情况；双方都能新增，路路可管理全部事项。</p></div><button class="button button-primary contributor-action" data-action="new-record" type="button"><i data-lucide="plus" aria-hidden="true"></i>新增事务</button></div>
+          <div class="view-heading"><div><p class="eyebrow">SHARED ACTION LEDGER</p><h2>事务记录台账</h2><p>像 Todo List 一样记录共同约定、行动计划和完成情况；按计划日期分组，每天都有独立清单。</p></div><button class="button button-primary contributor-action" data-action="new-record" type="button"><i data-lucide="plus" aria-hidden="true"></i>新增事务</button></div>
           <div class="record-toolbar">
             <label class="search-control"><i data-lucide="search" aria-hidden="true"></i><input id="recordSearch" type="search" placeholder="搜索事项、分类、说明或记录人" /></label>
             <label class="select-control"><span>状态</span><select id="recordStatusFilter"><option value="all">全部状态</option><option value="未办">未办</option><option value="进行中">进行中</option><option value="已办">已办</option></select></label>
             <label class="switch-control"><input id="cycleOnlyFilter" type="checkbox" /><span>仅本周期</span></label>
             <button class="button button-outline admin-only" data-action="export-csv" type="button" hidden><i data-lucide="file-down" aria-hidden="true"></i>导出 CSV</button>
           </div>
-          <div class="filter-summary"><span>共 <strong id="recordResultCount">0</strong> 条结果</span><span>全部 <b id="recordsCount">0</b> · 本周期 <b id="cycleRecordsCount">0</b></span></div>
+          <div class="filter-summary"><span>共 <strong id="recordResultCount">0</strong> 条结果 · 按计划日期分组</span><span>全部 <b id="recordsCount">0</b> · 本周期 <b id="cycleRecordsCount">0</b></span></div>
           <div class="records-table" id="recordsTable"></div>
         </section>
 
@@ -150,8 +150,8 @@
         </section>
 
         <section class="view" id="wishesView" data-view-panel="wishes" hidden>
-          <div class="view-heading"><div><p class="eyebrow">WISH EXCHANGE</p><h2>专属心愿兑换</h2><p>由路路小皇帝管理心愿、登记兑换并确认完成。</p></div><button class="button button-primary" data-action="new-wish" type="button"><i data-lucide="plus" aria-hidden="true"></i>新增心愿</button></div>
-          <div class="wish-balance-banner"><div><span>当前可兑换</span><strong><b id="wishBalanceCount">0</b> 份心愿</strong></div><p>每次兑换都会进入流水，完成后可单独确认，不会覆盖心愿清单。</p></div>
+          <div class="view-heading"><div><p class="eyebrow">WISH EXCHANGE</p><h2>专属心愿兑换</h2><p>由路路小皇帝管理心愿、登记兑换并确认完成。</p></div><button class="button button-primary" id="wishCreateButton" data-action="new-wish" type="button"><i data-lucide="crown" aria-hidden="true"></i>路路管理心愿</button></div>
+          <div class="wish-balance-banner"><div><span id="wishBalanceLabel">路路小皇帝专属额度</span><strong><b id="wishBalanceCount">不适用</b><span id="wishBalanceUnit"></span></strong></div><p id="wishBalanceNote">方方可以查看心愿清单；额度统计与兑换操作仅对路路小皇帝生效。</p></div>
           <div class="wish-grid" id="wishGrid"></div>
           <section class="redemption-section">
             <div class="section-heading"><div><p class="eyebrow">REDEMPTION LOG</p><h3>兑换流水</h3></div><span id="redemptionSummary">还没有兑换记录</span></div>
@@ -165,7 +165,7 @@
             <article class="panel settings-panel">
               <div class="panel-heading"><div><p class="eyebrow">EDITABLE RULES</p><h3>兑换规则</h3></div><i data-lucide="sliders-horizontal" aria-hidden="true"></i></div>
               <form id="settingsForm" class="form-stack">
-                <label>每多少项已办兑换 1 份心愿<input id="thresholdInput" name="threshold" type="number" min="1" max="99" required disabled /></label>
+                <div class="fixed-rule"><span>固定兑换规则</span><strong>每记录 1 项沟通问题，为路路小皇帝增加 1 份心愿额度</strong><small>按本周期内的沟通记录计算，每条记录计入一次；方方不适用该额度。</small></div>
                 <label>本周期开始日期<input id="periodStartInput" name="periodStart" type="date" required disabled /></label>
                 <label>共同约定<textarea id="agreementInput" name="agreement" rows="4" required disabled></textarea></label>
                 <button class="button button-primary reviewer-action" type="submit" disabled><i data-lucide="save" aria-hidden="true"></i>保存规则</button>
@@ -176,10 +176,10 @@
               <div class="data-note"><strong id="cloudModeTitle">正在检查云端连接</strong><span id="cloudModeDescription">本机缓存会继续保留，Supabase 初始化完成后自动启用跨设备同步。</span></div>
               <div class="cloud-sync-line"><span class="cloud-sync-dot" id="cloudSyncDot"></span><div><strong id="cloudSyncStatus">连接检查中</strong><small id="cloudSyncDetail">正在连接 Supabase</small></div></div>
               <div class="data-actions"><button class="button button-primary" id="migrateCloudButton" data-action="migrate-cloud" type="button" hidden><i data-lucide="cloud-upload" aria-hidden="true"></i>迁移本机数据到云端</button><button class="button button-outline admin-only" id="syncCloudButton" data-action="sync-cloud" type="button" hidden><i data-lucide="refresh-cw" aria-hidden="true"></i>立即同步</button><button class="button button-outline admin-only" data-action="export" type="button" hidden><i data-lucide="download" aria-hidden="true"></i>导出完整备份</button><button class="button button-outline admin-only" data-action="export-csv" type="button" hidden><i data-lucide="file-down" aria-hidden="true"></i>导出事项 CSV</button><button class="button button-outline admin-only" data-action="import" type="button" hidden><i data-lucide="upload" aria-hidden="true"></i>导入备份</button><input type="file" id="importFile" accept="application/json" hidden /></div>
-              <div class="session-note"><i data-lucide="timer-reset" aria-hidden="true"></i><span>页面刷新、重新进入或 30 分钟无操作后都会重新锁定。</span></div>
+              <div class="session-note"><i data-lucide="badge-check" aria-hidden="true"></i><span>身份会安全地保存在本设备；刷新网页无需重新输入密码。</span></div>
               <div class="divider"></div>
               <button class="text-button admin-only" data-action="change-password" type="button" hidden><i data-lucide="key-round" aria-hidden="true"></i>修改当前身份密码</button>
-              <button class="text-button danger-link admin-only" data-action="logout" type="button" hidden><i data-lucide="log-out" aria-hidden="true"></i>退出并锁定</button>
+              <button class="text-button danger-link admin-only" data-action="logout" type="button" hidden><i data-lucide="log-out" aria-hidden="true"></i>退出并切换身份</button>
             </article>
           </div>
         </section>
@@ -192,9 +192,9 @@
       <div class="modal-card auth-card" role="dialog" aria-modal="true" aria-labelledby="authTitle">
         <button class="modal-close" data-close-modal="authModal" type="button" aria-label="关闭"><i data-lucide="x" aria-hidden="true"></i></button>
         <div class="modal-icon"><i data-lucide="users-round" aria-hidden="true"></i></div>
-        <p class="eyebrow">IDENTITY ACCESS</p><h2 id="authTitle">选择身份并解锁</h2><p class="modal-description" id="authDescription">两种身份都可以记录；路路小皇帝拥有复核与全局管理权限。刷新或重新进入后需要再次输入密码。</p>
+        <p class="eyebrow">IDENTITY ACCESS</p><h2 id="authTitle">选择身份并登录</h2><p class="modal-description" id="authDescription">两种身份都可以记录；路路小皇帝拥有复核与全局管理权限。登录后会在本设备保持身份，主动退出后可以切换。</p>
         <div class="role-selector"><button class="role-option is-selected" data-login-role="recorder" type="button"><i data-lucide="pen-line"></i><strong>方方</strong><span>共同记录者</span></button><button class="role-option" data-login-role="reviewer" type="button"><i data-lucide="crown"></i><strong>路路小皇帝</strong><span>管理与复核</span></button></div>
-        <form id="authForm" class="form-stack"><input id="loginRole" type="hidden" value="recorder" /><label>身份密码<input id="passwordInput" type="password" inputmode="numeric" autocomplete="current-password" placeholder="输入身份密码" required /></label><p class="form-error" id="authError" hidden>密码不正确，请重试。</p><button class="button button-primary button-full" id="authSubmitButton" type="submit">解锁当前身份 <i data-lucide="arrow-right" aria-hidden="true"></i></button><button class="auth-reset-button" id="localPasswordResetButton" data-action="reset-password" type="button"><i data-lucide="rotate-ccw-key" aria-hidden="true"></i><span>重置当前身份为初始密码</span></button><small class="auth-reset-note" id="localPasswordResetNote">只重置当前浏览器中的密码，不会删除记录或图片。</small></form>
+        <form id="authForm" class="form-stack"><input id="loginRole" type="hidden" value="recorder" /><label>身份密码<input id="passwordInput" type="password" inputmode="numeric" autocomplete="current-password" placeholder="输入身份密码" required /></label><p class="form-error" id="authError" hidden>密码不正确，请重试。</p><button class="button button-primary button-full" id="authSubmitButton" type="submit">登录当前身份 <i data-lucide="arrow-right" aria-hidden="true"></i></button><button class="auth-reset-button" id="localPasswordResetButton" data-action="reset-password" type="button"><i data-lucide="rotate-ccw-key" aria-hidden="true"></i><span>重置当前身份为初始密码</span></button><small class="auth-reset-note" id="localPasswordResetNote">只重置当前浏览器中的密码，不会删除记录或图片。</small></form>
       </div>
     </div>
 

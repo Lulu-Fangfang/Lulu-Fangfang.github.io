@@ -3,8 +3,9 @@ const PASSWORD_HASH_KEYS = {
   recorder: "lulu-fangfang-password-recorder",
   reviewer: "lulu-fangfang-password-reviewer",
 };
+const LOCAL_ROLE_CACHE_KEY = "lulu-fangfang-active-local-role";
+const CLOUD_AUTH_STORAGE_KEY = "lulu-fangfang-supabase-auth";
 const DATA_VERSION = 5;
-const SESSION_TIMEOUT_MS = 30 * 60 * 1000;
 const CLOUD_CONFIG = window.LULU_FANGFANG_CLOUD_CONFIG || null;
 const RECORD_STATUSES = ["未办", "进行中", "已办"];
 const DEFAULT_PASSWORD_HASHES = {
@@ -15,7 +16,7 @@ const DEFAULT_PASSWORD_HASHES = {
 const defaultData = {
   version: DATA_VERSION,
   settings: {
-    threshold: 3,
+    threshold: 1,
     periodStart: "2026-08-01",
     agreement: "把想做的事认真写下，把答应彼此的事慢慢完成。一起记录，也一起把生活过好。",
   },
@@ -36,7 +37,6 @@ const defaultData = {
 let data = loadData();
 let currentRole = null;
 let isAdmin = false;
-let lastAdminActivity = 0;
 let activeView = location.hash.replace("#", "") || "overview";
 const recordFilters = { query: "", status: "all", cycleOnly: false };
 let pendingMomentImages = [];
@@ -270,13 +270,16 @@ async function initializeCloud() {
     return;
   }
 
-  cloudClient = window.supabase.createClient(CLOUD_CONFIG.url, CLOUD_CONFIG.publishableKey, {
-    auth: {
-      persistSession: false,
-      autoRefreshToken: true,
-      detectSessionInUrl: false,
-    },
-  });
+  if (!cloudClient) {
+    cloudClient = window.supabase.createClient(CLOUD_CONFIG.url, CLOUD_CONFIG.publishableKey, {
+      auth: {
+        persistSession: true,
+        autoRefreshToken: true,
+        detectSessionInUrl: false,
+        storageKey: CLOUD_AUTH_STORAGE_KEY,
+      },
+    });
+  }
 
   try {
     const { data: ready, error } = await cloudClient.rpc("house_cloud_ready");
@@ -447,21 +450,14 @@ function subscribeToCloudState() {
     });
 }
 
-async function loginCloud(role, password) {
-  if (!cloudClient || !cloudSchemaReady) throw new Error("云端尚未初始化");
-  const email = cloudRoleEmail(role);
-  if (!email) throw new Error("未配置该身份的云端账号");
-  setCloudSyncState("authenticating", "正在验证 Supabase 身份");
-  const { data: authResult, error: authError } = await cloudClient.auth.signInWithPassword({ email, password });
-  if (authError) throw authError;
-
+async function connectCloudIdentity(user, expectedRole = "") {
   const { data: rows, error: contextError } = await cloudClient.rpc("get_my_household");
   const row = Array.isArray(rows) ? rows[0] : rows;
   if (contextError || !row) {
     await cloudClient.auth.signOut({ scope: "local" });
     throw contextError || new Error("MEMBERSHIP_REQUIRED");
   }
-  if (row.member_role !== role) {
+  if (expectedRole && row.member_role !== expectedRole) {
     await cloudClient.auth.signOut({ scope: "local" });
     throw new Error("登录账号与所选身份不一致");
   }
@@ -470,7 +466,7 @@ async function loginCloud(role, password) {
   cloudContext = {
     householdId: row.household_id,
     revision: Number(row.revision) || 0,
-    userId: authResult.user.id,
+    userId: user.id,
     role: row.member_role,
     displayName: row.display_name,
   };
@@ -488,6 +484,33 @@ async function loginCloud(role, password) {
   }
   subscribeToCloudState();
   return row.member_role;
+}
+
+async function loginCloud(role, password) {
+  if (!cloudClient || !cloudSchemaReady) throw new Error("云端尚未初始化");
+  const email = cloudRoleEmail(role);
+  if (!email) throw new Error("未配置该身份的云端账号");
+  setCloudSyncState("authenticating", "正在验证 Supabase 身份");
+  const { data: authResult, error: authError } = await cloudClient.auth.signInWithPassword({ email, password });
+  if (authError) throw authError;
+  return connectCloudIdentity(authResult.user, role);
+}
+
+async function restoreCloudIdentity() {
+  if (!cloudClient || !cloudSchemaReady) return false;
+  const { data: sessionResult, error: sessionError } = await cloudClient.auth.getSession();
+  const session = sessionResult?.session;
+  if (sessionError || !session?.user) return false;
+  try {
+    setCloudSyncState("authenticating", "正在恢复本设备保存的身份");
+    const role = await connectCloudIdentity(session.user);
+    unlock(role, { restored: true });
+    return true;
+  } catch (error) {
+    await releaseCloudSession();
+    setCloudSyncState("error", friendlyCloudError(error));
+    return false;
+  }
 }
 
 async function migrateLocalDataToCloud({ askConfirmation = true, automatic = false } = {}) {
@@ -546,22 +569,18 @@ async function syncCloudNow() {
   }
 }
 
-function releaseCloudSession() {
+async function releaseCloudSession() {
   cloudSyncGeneration += 1;
   if (cloudChannel && cloudClient) cloudClient.removeChannel(cloudChannel);
   cloudChannel = null;
   cloudContext = null;
   pendingLocalMigration = null;
   cloudRetrySnapshot = null;
-  if (cloudClient) cloudClient.auth.signOut({ scope: "local" }).catch(() => {});
+  if (cloudClient) await cloudClient.auth.signOut({ scope: "local" }).catch(() => {});
   if (cloudSchemaReady) {
     cloudSyncState = "ready";
     cloudSyncDetail = "Supabase 已就绪，登录后开始同步";
   }
-}
-
-function touchAdminSession() {
-  if (isAdmin) lastAdminActivity = Date.now();
 }
 
 const isRecorder = () => currentRole === "recorder";
@@ -615,15 +634,16 @@ function isInCycle(record) {
 function metrics() {
   const cycleRecords = data.records.filter(isInCycle);
   const completedCycleRecords = cycleRecords.filter((record) => record.status === "已办");
+  const cycleIssues = data.issues.filter(isInCycle);
   const cycleRedemptions = data.redemptions.filter((item) => item.redeemedAt >= data.settings.periodStart && item.redeemedAt <= today());
-  const threshold = Math.max(1, Number(data.settings.threshold) || 1);
-  const remainder = completedCycleRecords.length % threshold;
-  const earned = Math.floor(completedCycleRecords.length / threshold);
+  const threshold = 1;
+  const earned = cycleIssues.length;
   const used = cycleRedemptions.length;
   const available = Math.max(0, earned - used);
   return {
     cycleRecords,
     completedCycleRecords,
+    cycleIssues,
     cycleRedemptions,
     threshold,
     earned,
@@ -632,9 +652,9 @@ function metrics() {
     pending: data.records.filter((record) => record.status !== "已办").length,
     completed: data.redemptions.filter((item) => item.status === "已完成").length,
     registeredWishes: data.redemptions.length,
-    remainder,
-    distance: available > 0 ? 0 : remainder === 0 ? threshold : threshold - remainder,
-    progress: available > 0 ? 100 : (remainder / threshold) * 100,
+    remainder: available > 0 ? 1 : 0,
+    distance: available > 0 ? 0 : 1,
+    progress: available > 0 ? 100 : 0,
   };
 }
 
@@ -647,22 +667,44 @@ function statusClass(status) {
 
 function renderStats() {
   const m = metrics();
-  $("#statRecords").textContent = m.completedCycleRecords.length;
-  $("#statAvailable").textContent = m.available;
+  const creditActive = isReviewer();
+  $("#statRecords").textContent = m.cycleIssues.length;
   $("#statPending").textContent = m.pending;
   $("#statCompleted").textContent = m.completed;
   $("#statPeriod").textContent = `从 ${formatDate(data.settings.periodStart)} 开始`;
-  $("#statThreshold").textContent = `每 ${m.threshold} 项已办兑换 1 份`;
-  $("#progressKicker").textContent = m.available > 0 ? `${m.available} 份可用` : `${m.remainder} / ${m.threshold}`;
-  $("#progressHeadline").textContent = m.available > 0 ? "可以选择一份心愿" : `还差 ${m.distance} 项已办`;
-  $("#progressSubline").textContent = m.available > 0 ? "去心愿清单看看，这次想实现哪一项。" : "把一件约定认真做完，就离心愿更近一点。";
-  $("#progressBar").style.width = `${m.progress}%`;
-  $("#progressStart").textContent = `本周期起点 ${formatDate(data.settings.periodStart)}`;
-  $("#progressHint").textContent = m.available > 0 ? "本轮已达成" : "继续完成共同事项";
-  $("#earnedCount").textContent = m.earned;
-  $("#usedCount").textContent = m.used;
-  $("#balanceCount").textContent = m.available;
-  $("#wishBalanceCount").textContent = m.available;
+  if (creditActive) {
+    $("#statAvailable").textContent = m.available;
+    $("#statThreshold").textContent = "每 1 项沟通问题兑换 1 份";
+    $("#progressKicker").textContent = m.available > 0 ? `${m.available} 份可用` : `${m.remainder} / ${m.threshold}`;
+    $("#progressHeadline").textContent = m.available > 0 ? "可以选择一份心愿" : "还差 1 项沟通问题";
+    $("#progressSubline").textContent = m.available > 0 ? "去心愿清单看看，这次想实现哪一项。" : "每记录一项需要沟通的问题，就获得 1 份心愿额度。";
+    $("#progressBar").style.width = `${m.progress}%`;
+    $("#progressStart").textContent = `本周期起点 ${formatDate(data.settings.periodStart)}`;
+    $("#progressHint").textContent = m.available > 0 ? "当前可以兑换" : "记录新的沟通问题";
+    $("#earnedCount").textContent = m.earned;
+    $("#usedCount").textContent = m.used;
+    $("#balanceCount").textContent = m.available;
+    $("#wishBalanceCount").textContent = m.available;
+    $("#wishBalanceUnit").textContent = "份心愿";
+    $("#wishBalanceLabel").textContent = "路路当前可兑换";
+    $("#wishBalanceNote").textContent = "每次兑换都会进入流水，完成后可单独确认，不会覆盖心愿清单。";
+  } else {
+    $("#statAvailable").textContent = "—";
+    $("#statThreshold").textContent = "仅路路小皇帝拥有心愿额度";
+    $("#progressKicker").textContent = "路路专属";
+    $("#progressHeadline").textContent = "心愿额度仅对路路小皇帝生效";
+    $("#progressSubline").textContent = "方方可以共同记录和查看心愿，但不能获得、使用或兑换额度。";
+    $("#progressBar").style.width = "0%";
+    $("#progressStart").textContent = "当前身份不适用心愿额度";
+    $("#progressHint").textContent = "切换路路身份后查看";
+    $("#earnedCount").textContent = "—";
+    $("#usedCount").textContent = "—";
+    $("#balanceCount").textContent = "—";
+    $("#wishBalanceCount").textContent = "不适用";
+    $("#wishBalanceUnit").textContent = "";
+    $("#wishBalanceLabel").textContent = "路路小皇帝专属额度";
+    $("#wishBalanceNote").textContent = "方方可以查看心愿清单；额度统计与兑换操作仅对路路小皇帝生效。";
+  }
   $("#recordsCount").textContent = data.records.length;
   $("#cycleRecordsCount").textContent = m.cycleRecords.length;
   $("#agreementNote").textContent = data.settings.agreement;
@@ -761,6 +803,18 @@ function recordActions(record) {
   return `<span class="status-label">只读</span>`;
 }
 
+function recordDayTitle(value) {
+  if (!value) return "未填写日期";
+  const date = new Date(`${value}T00:00:00`);
+  if (Number.isNaN(date.getTime())) return value;
+  const weekday = ["星期日", "星期一", "星期二", "星期三", "星期四", "星期五", "星期六"][date.getDay()];
+  return `${formatDate(value)} · ${weekday}`;
+}
+
+function renderRecordRows(records) {
+  return records.map((record) => `<div class="record-row ${record.status === "已办" ? "is-done" : ""}"><div class="record-cell record-state-cell" data-label="状态"><button class="record-check" data-action="toggle-record" data-id="${record.id}" type="button" ${!canManageEntry(record) ? "disabled" : ""} aria-label="${record.status === "已办" ? "恢复为未办" : "标记为已办"}"><i data-lucide="${record.status === "已办" ? "check" : "circle"}"></i></button><span class="status-label ${statusClass(record.status)}">${escapeHtml(record.status)}</span></div><div class="record-cell record-date" data-label="计划时间">${escapeHtml(record.time || "未设置")}</div><div class="record-cell situation" data-label="事项"><strong>${escapeHtml(record.title)}</strong><small>${escapeHtml(record.notes || "")}</small></div><div class="record-cell" data-label="分类"><span class="status-label">${escapeHtml(record.category)}</span></div><div class="record-cell repair" data-label="执行说明"><small>${escapeHtml(record.details || "暂无补充")}</small></div><div class="record-cell" data-label="记录人"><small>${creatorName(record)}</small></div><div class="record-cell action-cell" data-label="操作">${recordActions(record)}</div></div>`).join("");
+}
+
 function renderRecords() {
   const target = $("#recordsTable");
   const query = recordFilters.query.toLowerCase();
@@ -776,13 +830,28 @@ function renderRecords() {
     return;
   }
   const header = `<div class="record-row record-header"><div class="record-cell">状态</div><div class="record-cell">计划时间</div><div class="record-cell">事项</div><div class="record-cell">分类</div><div class="record-cell">执行说明</div><div class="record-cell">记录人</div><div class="record-cell">操作</div></div>`;
-  const rows = filtered.map((record) => `<div class="record-row ${record.status === "已办" ? "is-done" : ""}"><div class="record-cell record-state-cell" data-label="状态"><button class="record-check" data-action="toggle-record" data-id="${record.id}" type="button" ${!canManageEntry(record) ? "disabled" : ""} aria-label="${record.status === "已办" ? "恢复为未办" : "标记为已办"}"><i data-lucide="${record.status === "已办" ? "check" : "circle"}"></i></button><span class="status-label ${statusClass(record.status)}">${escapeHtml(record.status)}</span></div><div class="record-cell record-date" data-label="计划时间">${formatDateTime(record.date, record.time)}</div><div class="record-cell situation" data-label="事项"><strong>${escapeHtml(record.title)}</strong><small>${escapeHtml(record.notes || "")}</small></div><div class="record-cell" data-label="分类"><span class="status-label">${escapeHtml(record.category)}</span></div><div class="record-cell repair" data-label="执行说明"><small>${escapeHtml(record.details || "暂无补充")}</small></div><div class="record-cell" data-label="记录人"><small>${creatorName(record)}</small></div><div class="record-cell action-cell" data-label="操作">${recordActions(record)}</div></div>`).join("");
-  target.innerHTML = header + rows;
+  const groups = filtered.reduce((result, record) => {
+    if (!result.has(record.date)) result.set(record.date, []);
+    result.get(record.date).push(record);
+    return result;
+  }, new Map());
+  target.innerHTML = [...groups.entries()].map(([date, records]) => {
+    const pending = records.filter((record) => record.status === "未办").length;
+    const progressing = records.filter((record) => record.status === "进行中").length;
+    const done = records.filter((record) => record.status === "已办").length;
+    const relative = date === today() ? "今天" : "计划日期";
+    return `<section class="record-day-group" data-record-date="${escapeHtml(date)}"><div class="record-day-heading"><div><span>${relative}</span><strong>${escapeHtml(recordDayTitle(date))}</strong></div><div class="record-day-counts"><span>未办 <b>${pending}</b></span><span>进行中 <b>${progressing}</b></span><span>已办 <b>${done}</b></span></div></div><div class="record-day-list">${header}${renderRecordRows(records)}</div></section>`;
+  }).join("");
 }
 
 function renderWishes() {
   const target = $("#wishGrid");
   const m = metrics();
+  const createButton = $("#wishCreateButton");
+  createButton.disabled = !isReviewer();
+  createButton.innerHTML = isReviewer()
+    ? '<i data-lucide="plus" aria-hidden="true"></i>新增心愿'
+    : '<i data-lucide="crown" aria-hidden="true"></i>路路管理心愿';
   target.innerHTML = data.wishes.map((wish, index) => {
     const related = data.redemptions.filter((item) => item.wishId === wish.id).sort((a, b) => b.redeemedAt.localeCompare(a.redeemedAt));
     const latest = related[0];
@@ -795,14 +864,13 @@ function renderRedemptions() {
   const sorted = [...data.redemptions].sort((a, b) => `${b.redeemedAt}-${b.id}`.localeCompare(`${a.redeemedAt}-${a.id}`));
   $("#redemptionSummary").textContent = sorted.length ? `共 ${sorted.length} 次 · 已完成 ${sorted.filter((item) => item.status === "已完成").length} 次` : "还没有兑换记录";
   if (!sorted.length) {
-    target.innerHTML = `<div class="empty-state"><i data-lucide="ticket"></i><strong>还没有兑换流水</strong><span>达到兑换门槛后，从上方选择一份心愿。</span></div>`;
+    target.innerHTML = `<div class="empty-state"><i data-lucide="ticket"></i><strong>还没有兑换流水</strong><span>记录沟通问题获得额度后，从上方选择一份心愿。</span></div>`;
     return;
   }
   target.innerHTML = sorted.map((item, index) => `<div class="redemption-row"><span class="redemption-index">${String(index + 1).padStart(2, "0")}</span><div class="redemption-main"><strong>${escapeHtml(item.wishTitle)}</strong><small>${item.completedAt ? `完成于 ${formatDate(item.completedAt)}` : "等待路路小皇帝确认"}</small></div><span class="redemption-date">兑换于 ${formatDate(item.redeemedAt)}</span><span class="status-label ${statusClass(item.status)}">${escapeHtml(item.status)}</span><div class="redemption-actions">${isReviewer() && item.status !== "已完成" ? `<button class="button button-outline" data-action="complete-redemption" data-id="${item.id}" type="button"><i data-lucide="check"></i>确认完成</button>` : ""}${isReviewer() ? `<button class="icon-button danger" data-action="delete-redemption" data-id="${item.id}" title="撤销这次兑换"><i data-lucide="undo-2"></i></button>` : ""}</div></div>`).join("");
 }
 
 function renderSettings() {
-  $("#thresholdInput").value = data.settings.threshold;
   $("#periodStartInput").value = data.settings.periodStart;
   $("#agreementInput").value = data.settings.agreement;
   const roleName = isRecorder() ? "方方 · 共同记录" : isReviewer() ? "路路小皇帝 · 管理与复核" : "访客模式";
@@ -814,7 +882,7 @@ function renderSettings() {
     : '<i data-lucide="lock-keyhole" aria-hidden="true"></i><span>身份登录</span>';
   adminButton.classList.toggle("is-admin", isAdmin);
   adminButton.setAttribute("aria-label", isAdmin ? `${roleName}已解锁，进入设置` : "选择身份登录");
-  ["#thresholdInput", "#periodStartInput", "#agreementInput"].forEach((selector) => {
+  ["#periodStartInput", "#agreementInput"].forEach((selector) => {
     $(selector).disabled = !isReviewer();
   });
   $$(".admin-only").forEach((element) => {
@@ -839,7 +907,7 @@ function renderSettings() {
   };
   $("#cloudModeTitle").textContent = cloudConfigured ? "当前模式：Supabase 云端同步" : "当前模式：本机安全缓存";
   $("#cloudModeDescription").textContent = cloudConfigured
-    ? "文字和压缩图片同步到两人专属云端，本机保留缓存；刷新后仍需重新登录。"
+    ? "文字和压缩图片同步到两人专属云端，本机保留缓存；身份会在本设备保持登录。"
     : "公开连接信息已配置；执行 supabase-setup.sql 前，网站继续使用原有本机数据。";
   $("#cloudSyncStatus").textContent = statusLabels[cloudSyncState] || "连接状态未知";
   $("#cloudSyncDetail").textContent = cloudSyncDetail;
@@ -853,8 +921,8 @@ function renderSettings() {
   $("#localPasswordResetButton").hidden = cloudConfigured;
   $("#localPasswordResetNote").hidden = cloudConfigured;
   $("#authDescription").textContent = cloudConfigured
-    ? "两种身份都可以记录；路路小皇帝拥有复核与全局管理权限。刷新或重新进入后需要再次输入密码。"
-    : "两种身份都可以记录；路路小皇帝拥有复核与全局管理权限。刷新或重新进入后需要再次输入。";
+    ? "两种身份都可以记录；路路小皇帝拥有复核与全局管理权限。登录后会在本设备保持身份，主动退出后可以切换。"
+    : "两种身份都可以记录；路路小皇帝拥有复核与全局管理权限。登录后会在当前浏览器保持身份。";
   $("#momentStorageStatus").textContent = cloudConfigured ? "Supabase 私有图片同步" : "本机图片缓存";
   $("#momentStorageNote").textContent = cloudActive ? "会自动压缩并同步到两人的私有云端。" : "会自动压缩并先保存在当前浏览器。";
   $("#passwordDescription").textContent = cloudActive ? "新密码会更新到当前 Supabase 身份。" : "新密码只保存在当前浏览器。";
@@ -999,17 +1067,17 @@ async function passwordMatches(value, stored) {
   return stored === sha256 || stored === `sha256:${sha256}` || stored.split("|").includes(`sha256:${sha256}`);
 }
 
-function unlock(role) {
+function unlock(role, { restored = false } = {}) {
   currentRole = role;
   isAdmin = true;
-  touchAdminSession();
   closeModal("authModal");
   $("#passwordInput").value = "";
   $("#authError").hidden = true;
   render();
-  setView(role === "recorder" ? "daily" : "overview");
+  if (!restored) setView(role === "recorder" ? "daily" : "overview");
   const mode = cloudContext ? "，云端同步已连接" : "，当前为本机模式";
-  toast(`${role === "recorder" ? "方方共同记录身份已解锁" : "路路小皇帝管理身份已解锁"}${mode}`);
+  const action = restored ? "身份已自动恢复" : "身份已登录";
+  toast(`${role === "recorder" ? "方方共同记录" : "路路小皇帝管理"}${action}${mode}`);
 }
 
 function resetLocalPassword() {
@@ -1019,9 +1087,9 @@ function resetLocalPassword() {
   }
   const role = $("#loginRole").value || currentRole || "recorder";
   localStorage.removeItem(PASSWORD_HASH_KEYS[role]);
+  localStorage.removeItem(LOCAL_ROLE_CACHE_KEY);
   isAdmin = false;
   currentRole = null;
-  lastAdminActivity = 0;
   $("#passwordInput").value = "";
   $("#authError").hidden = true;
   render();
@@ -1029,25 +1097,17 @@ function resetLocalPassword() {
   setTimeout(() => $("#passwordInput").focus(), 30);
 }
 
-function logout() {
-  releaseCloudSession();
+async function logout() {
+  const previousRole = currentRole;
+  await releaseCloudSession();
+  localStorage.removeItem(LOCAL_ROLE_CACHE_KEY);
   isAdmin = false;
   currentRole = null;
-  lastAdminActivity = 0;
+  selectLoginRole(previousRole === "reviewer" ? "recorder" : "reviewer");
   render();
-  toast("已退出并重新锁定");
-}
-
-function checkAdminSession() {
-  if (!isAdmin) return;
-  if (!lastAdminActivity || Date.now() - lastAdminActivity > SESSION_TIMEOUT_MS) {
-    releaseCloudSession();
-    isAdmin = false;
-    currentRole = null;
-    lastAdminActivity = 0;
-    render();
-    toast("身份会话已自动锁定");
-  }
+  setView("overview");
+  openModal("authModal");
+  toast("已退出当前身份，请选择新的身份登录");
 }
 
 function openRecordEditor(id = "") {
@@ -1314,7 +1374,7 @@ document.addEventListener("click", async (event) => {
   if (action === "import") importBackup();
   if (action === "migrate-cloud") await migrateLocalDataToCloud();
   if (action === "sync-cloud") await syncCloudNow();
-  if (action === "logout") logout();
+  if (action === "logout") await logout();
   if (action === "reset-password" && !cloudSchemaReady && confirm("只重置当前所选身份在这个浏览器中的密码，不会删除数据。确定继续吗？")) resetLocalPassword();
   if (action === "change-password" && requireAdmin("修改密码")) {
     $("#passwordModalTitle").textContent = `修改${isRecorder() ? "方方" : "路路小皇帝"}的密码`;
@@ -1337,13 +1397,13 @@ $("#authForm").addEventListener("submit", async (event) => {
     } else {
       const matches = await passwordMatches(password, currentPasswordHash(role));
       if (!matches) throw new Error("LOCAL_PASSWORD_MISMATCH");
+      localStorage.setItem(LOCAL_ROLE_CACHE_KEY, role);
       unlock(role);
     }
   } catch (error) {
-    releaseCloudSession();
+    await releaseCloudSession();
     isAdmin = false;
     currentRole = null;
-    lastAdminActivity = 0;
     render();
     $("#authError").textContent = error?.message === "LOCAL_PASSWORD_MISMATCH"
       ? "密码不正确，请重试。"
@@ -1473,7 +1533,6 @@ $("#wishForm").addEventListener("submit", async (event) => {
 $("#settingsForm").addEventListener("submit", async (event) => {
   event.preventDefault();
   if (!requireRole("reviewer", "保存规则")) return;
-  data.settings.threshold = Math.max(1, Number($("#thresholdInput").value) || 1);
   data.settings.periodStart = $("#periodStartInput").value || today();
   data.settings.agreement = $("#agreementInput").value.trim() || defaultData.settings.agreement;
   await commitDataChange("规则已保存");
@@ -1534,33 +1593,18 @@ $("#cycleOnlyFilter").addEventListener("change", (event) => {
 });
 
 window.addEventListener("hashchange", () => { activeView = location.hash.replace("#", "") || "overview"; renderView(); });
-window.addEventListener("pagehide", () => {
-  releaseCloudSession();
-  isAdmin = false;
-  currentRole = null;
-  lastAdminActivity = 0;
-});
-window.addEventListener("pageshow", (event) => {
-  if (!event.persisted) return;
-  isAdmin = false;
-  currentRole = null;
-  lastAdminActivity = 0;
-  render();
-});
 window.addEventListener("offline", () => setCloudSyncState("unavailable", "网络已断开，修改会先保存在当前浏览器"));
 window.addEventListener("online", async () => {
   if (cloudContext && isAdmin) await syncCloudNow();
   else {
     await initializeCloud();
+    if (cloudSchemaReady && !isAdmin) await restoreCloudIdentity();
     render();
   }
 });
-document.addEventListener("pointerdown", touchAdminSession, { passive: true });
 document.addEventListener("keydown", (event) => {
-  touchAdminSession();
   if (event.key === "Escape") $$(".modal-backdrop:not([hidden])").forEach((modal) => { modal.hidden = true; });
 });
-setInterval(checkAdminSession, 60 * 1000);
 
 async function initialize() {
   $("#todayLabel").textContent = formatDate(today());
@@ -1568,8 +1612,13 @@ async function initialize() {
   await hydrateMediaCache();
   render();
   await initializeCloud();
+  if (cloudSchemaReady) await restoreCloudIdentity();
+  else {
+    const cachedRole = localStorage.getItem(LOCAL_ROLE_CACHE_KEY);
+    if (["recorder", "reviewer"].includes(cachedRole)) unlock(cachedRole, { restored: true });
+  }
   render();
-  if (cloudSchemaReady && !isAdmin) openModal("authModal");
+  if (!isAdmin) openModal("authModal");
 }
 
 initialize();
