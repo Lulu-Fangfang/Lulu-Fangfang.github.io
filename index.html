@@ -4,17 +4,17 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <meta name="theme-color" content="#f7f3eb" />
-    <meta name="description" content="路路与方方记录日常、共同计划、问题沟通和心愿的恋爱小平台。" />
+    <meta name="description" content="路路与方方记录日常美好、事务台账、沟通进度和心愿的恋爱小平台。" />
     <title>路路 × 方方 | 我们的小站</title>
     <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23173149'/%3E%3Ctext x='32' y='40' text-anchor='middle' font-family='Arial' font-size='21' font-weight='700' fill='white'%3EL%2BF%3C/text%3E%3C/svg%3E" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Noto+Sans+SC:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
-    <link rel="stylesheet" href="styles.css?v=20260817-8" />
+    <link rel="stylesheet" href="styles.css?v=20260817-10" />
     <script src="https://unpkg.com/lucide@latest" defer></script>
-    <script src="supabase-config.js?v=20260817-8" defer></script>
+    <script src="supabase-config.js?v=20260817-9" defer></script>
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.112.3/dist/umd/supabase.min.js" defer></script>
-    <script src="app.js?v=20260817-8" defer></script>
+    <script src="app.js?v=20260817-10" defer></script>
   </head>
   <body>
     <div class="app-shell">
@@ -51,13 +51,19 @@
         <nav class="tab-nav" aria-label="主要页面">
           <button class="tab-button is-active" data-view="overview" type="button"><i data-lucide="layout-dashboard" aria-hidden="true"></i><span>看板</span></button>
           <button class="tab-button" data-view="daily" type="button"><i data-lucide="images" aria-hidden="true"></i><span>日常美好</span></button>
-          <button class="tab-button" data-view="records" type="button"><i data-lucide="notebook-pen" aria-hidden="true"></i><span>行为日志</span></button>
-          <button class="tab-button" data-view="issues" type="button"><i data-lucide="messages-square" aria-hidden="true"></i><span>问题沟通</span></button>
+          <button class="tab-button" data-view="records" type="button"><i data-lucide="notebook-pen" aria-hidden="true"></i><span>事务记录台账</span></button>
+          <button class="tab-button" data-view="issues" type="button"><i data-lucide="messages-square" aria-hidden="true"></i><span>沟通记录</span></button>
           <button class="tab-button" data-view="wishes" type="button"><i data-lucide="sparkles" aria-hidden="true"></i><span>心愿兑换</span></button>
           <button class="tab-button" data-view="settings" type="button"><i data-lucide="sliders-horizontal" aria-hidden="true"></i><span>设置</span></button>
         </nav>
 
         <section class="view is-visible" id="overviewView" data-view-panel="overview">
+          <div class="overview-heading"><div><p class="eyebrow">OUR SHARED SPACE</p><h2>我们的小站</h2></div><p>三个模块各自记录一件事，入口和状态一眼就能分清。</p></div>
+          <div class="module-hub">
+            <button class="module-hub-item module-hub-daily" data-view-target="daily" type="button"><span class="module-hub-icon"><i data-lucide="images" aria-hidden="true"></i></span><span class="module-hub-copy"><small>01 · BEAUTIFUL DAYS</small><strong>日常美好</strong><span class="module-hub-purpose">生活照片与每日手账</span><span class="module-hub-summary" id="hubDailySummary">美好 0 条 · 今日手账 0 项</span></span><i class="module-hub-arrow" data-lucide="arrow-right" aria-hidden="true"></i></button>
+            <button class="module-hub-item module-hub-records" data-view-target="records" type="button"><span class="module-hub-icon"><i data-lucide="list-checks" aria-hidden="true"></i></span><span class="module-hub-copy"><small>02 · ACTION LEDGER</small><strong>事务记录台账</strong><span class="module-hub-purpose">待办、进行中与已办事项</span><span class="module-hub-summary" id="hubRecordSummary">待办 0 项 · 已办 0 项</span></span><i class="module-hub-arrow" data-lucide="arrow-right" aria-hidden="true"></i></button>
+            <button class="module-hub-item module-hub-issues" data-view-target="issues" type="button"><span class="module-hub-icon"><i data-lucide="messages-square" aria-hidden="true"></i></span><span class="module-hub-copy"><small>03 · COMMUNICATION</small><strong>沟通记录</strong><span class="module-hub-purpose">问题、感受与处理进度</span><span class="module-hub-summary" id="hubIssueSummary">待处理 0 条 · 已解决 0 条</span></span><i class="module-hub-arrow" data-lucide="arrow-right" aria-hidden="true"></i></button>
+          </div>
           <div class="stats-grid">
             <article class="stat-card stat-card-dark">
               <div class="stat-icon"><i data-lucide="message-circle-heart" aria-hidden="true"></i></div>
@@ -93,7 +99,7 @@
             </article>
 
             <article class="panel activity-panel">
-              <div class="panel-heading"><div><p class="eyebrow">SHARED ACTIONS</p><h2>最近的行为事项</h2></div><button class="text-button" data-view-target="records" type="button">查看全部 <i data-lucide="arrow-up-right" aria-hidden="true"></i></button></div>
+              <div class="panel-heading"><div><p class="eyebrow">ACTION LEDGER</p><h2>最近的事务</h2></div><button class="text-button" data-view-target="records" type="button">查看台账 <i data-lucide="arrow-up-right" aria-hidden="true"></i></button></div>
               <div id="recentRecords" class="activity-list"></div>
             </article>
           </div>
@@ -126,7 +132,7 @@
         </section>
 
         <section class="view" id="recordsView" data-view-panel="records" hidden>
-          <div class="view-heading"><div><p class="eyebrow">SHARED ACTION LEDGER</p><h2>行为事项台账</h2><p>像 Todo List 一样记录共同约定、行动计划和完成情况；双方都能新增，路路可管理全部事项。</p></div><button class="button button-primary contributor-action" data-action="new-record" type="button"><i data-lucide="plus" aria-hidden="true"></i>新增事项</button></div>
+          <div class="view-heading"><div><p class="eyebrow">SHARED ACTION LEDGER</p><h2>事务记录台账</h2><p>像 Todo List 一样记录共同约定、行动计划和完成情况；双方都能新增，路路可管理全部事项。</p></div><button class="button button-primary contributor-action" data-action="new-record" type="button"><i data-lucide="plus" aria-hidden="true"></i>新增事务</button></div>
           <div class="record-toolbar">
             <label class="search-control"><i data-lucide="search" aria-hidden="true"></i><input id="recordSearch" type="search" placeholder="搜索事项、分类、说明或记录人" /></label>
             <label class="select-control"><span>状态</span><select id="recordStatusFilter"><option value="all">全部状态</option><option value="未办">未办</option><option value="进行中">进行中</option><option value="已办">已办</option></select></label>
@@ -138,7 +144,7 @@
         </section>
 
         <section class="view" id="issuesView" data-view-panel="issues" hidden>
-          <div class="view-heading"><div><p class="eyebrow">CURRENT ISSUES</p><h2>现在的问题沟通记录</h2><p>把当前问题、彼此感受和下一步方案分开写清楚；双方都能记录，路路负责推进与确认结果。</p></div><button class="button button-primary contributor-action" data-action="new-issue" type="button"><i data-lucide="message-square-plus" aria-hidden="true"></i>记录问题</button></div>
+          <div class="view-heading"><div><p class="eyebrow">COMMUNICATION NOTES</p><h2>沟通记录</h2><p>把当前问题、彼此感受和下一步方案分开写清楚；双方都能记录，路路负责推进与确认结果。</p></div><button class="button button-primary contributor-action" data-action="new-issue" type="button"><i data-lucide="message-square-plus" aria-hidden="true"></i>新增沟通</button></div>
           <div class="issue-summary" id="issueSummary"></div>
           <div class="issue-grid" id="issueGrid"></div>
         </section>
@@ -196,15 +202,15 @@
       <div class="modal-card large-modal" role="dialog" aria-modal="true" aria-labelledby="momentModalTitle">
         <button class="modal-close" data-close-modal="momentModal" type="button" aria-label="关闭"><i data-lucide="x" aria-hidden="true"></i></button>
         <p class="eyebrow">BEAUTIFUL DAYS</p><h2 id="momentModalTitle">记录一件美好小事</h2>
-        <form id="momentForm" class="form-grid"><input id="momentId" type="hidden" /><label>日期<input id="momentDate" type="date" required /></label><label>标题<input id="momentTitle" type="text" maxlength="60" placeholder="今天值得记住的事" required /></label><label class="span-2">记录<textarea id="momentNote" rows="4" maxlength="500" placeholder="写下当时的心情和细节"></textarea></label><label class="span-2 image-upload-field"><span>照片（最多 4 张）</span><input id="momentImages" type="file" accept="image/*" multiple /><small id="momentStorageNote">会自动压缩并保存在当前浏览器。</small></label><div class="image-preview-grid span-2" id="momentImagePreview"></div><div class="modal-form-actions span-2"><button class="button button-outline" data-close-modal="momentModal" type="button">取消</button><button class="button button-primary" type="submit"><i data-lucide="save"></i>保存美好</button></div></form>
+        <form id="momentForm" class="form-grid"><input id="momentId" type="hidden" /><label>日期<input id="momentDate" type="date" required /></label><label>时间<input id="momentTime" type="time" required /></label><label class="span-2">标题<input id="momentTitle" type="text" maxlength="60" placeholder="今天值得记住的事" required /></label><label class="span-2">记录<textarea id="momentNote" rows="4" maxlength="500" placeholder="写下当时的心情和细节"></textarea></label><label class="span-2 image-upload-field"><span>照片（最多 4 张）</span><input id="momentImages" type="file" accept="image/*" multiple /><small id="momentStorageNote">会自动压缩并保存在当前浏览器。</small></label><div class="image-preview-grid span-2" id="momentImagePreview"></div><div class="modal-form-actions span-2"><button class="button button-outline" data-close-modal="momentModal" type="button">取消</button><button class="button button-primary" type="submit"><i data-lucide="save"></i>保存美好</button></div></form>
       </div>
     </div>
 
     <div class="modal-backdrop" id="recordModal" hidden>
       <div class="modal-card large-modal" role="dialog" aria-modal="true" aria-labelledby="recordModalTitle">
         <button class="modal-close" data-close-modal="recordModal" type="button" aria-label="关闭"><i data-lucide="x" aria-hidden="true"></i></button>
-        <p class="eyebrow">SHARED ACTION LEDGER</p><h2 id="recordModalTitle">新增行为事项</h2>
-        <form id="recordForm" class="form-grid"><input id="recordId" type="hidden" /><label>计划日期<input id="recordDate" type="date" required /></label><label>事项分类<select id="recordCategory"><option>共同约定</option><option>家务分工</option><option>关心陪伴</option><option>共同计划</option><option>习惯改善</option><option>其他</option></select></label><label class="span-2">事项内容<input id="recordTitle" type="text" maxlength="100" placeholder="例如：周六一起整理本月照片" required /></label><label class="span-2">执行说明<textarea id="recordDetails" rows="3" maxlength="500" placeholder="补充负责人、完成标准或计划步骤"></textarea></label><label>当前状态<select id="recordStatus"><option>未办</option><option>进行中</option><option>已办</option></select><small>完成的事项会计入心愿兑换进度。</small></label><label>备注<input id="recordNotes" type="text" maxlength="160" placeholder="可选" /></label><div class="modal-form-actions span-2"><button class="button button-outline" data-close-modal="recordModal" type="button">取消</button><button class="button button-primary" type="submit"><i data-lucide="save" aria-hidden="true"></i>保存事项</button></div></form>
+        <p class="eyebrow">SHARED ACTION LEDGER</p><h2 id="recordModalTitle">新增事务</h2>
+        <form id="recordForm" class="form-grid"><input id="recordId" type="hidden" /><label>计划日期<input id="recordDate" type="date" required /></label><label>计划时间<input id="recordTime" type="time" required /></label><label>事务分类<select id="recordCategory"><option>共同约定</option><option>家务分工</option><option>关心陪伴</option><option>共同计划</option><option>习惯改善</option><option>其他</option></select></label><label>当前状态<select id="recordStatus"><option>未办</option><option>进行中</option><option>已办</option></select><small>已办事务会计入心愿兑换进度。</small></label><label class="span-2">事务内容<input id="recordTitle" type="text" maxlength="100" placeholder="例如：周六一起整理本月照片" required /></label><label class="span-2">执行说明<textarea id="recordDetails" rows="3" maxlength="500" placeholder="补充负责人、完成标准或计划步骤"></textarea></label><label class="span-2">备注<input id="recordNotes" type="text" maxlength="160" placeholder="可选" /></label><div class="modal-form-actions span-2"><button class="button button-outline" data-close-modal="recordModal" type="button">取消</button><button class="button button-primary" type="submit"><i data-lucide="save" aria-hidden="true"></i>保存事务</button></div></form>
       </div>
     </div>
 
@@ -219,8 +225,8 @@
     <div class="modal-backdrop" id="issueModal" hidden>
       <div class="modal-card large-modal" role="dialog" aria-modal="true" aria-labelledby="issueModalTitle">
         <button class="modal-close" data-close-modal="issueModal" type="button" aria-label="关闭"><i data-lucide="x" aria-hidden="true"></i></button>
-        <p class="eyebrow">CURRENT ISSUES</p><h2 id="issueModalTitle">记录当前问题</h2>
-        <form id="issueForm" class="form-grid"><input id="issueId" type="hidden" /><label>日期<input id="issueDate" type="date" required /></label><label>问题标题<input id="issueTitle" type="text" maxlength="80" required /></label><label class="span-2">问题与感受<textarea id="issueDescription" rows="4" maxlength="800" required></textarea></label><label class="span-2">建议的下一步<textarea id="issueProposal" rows="3" maxlength="500" placeholder="希望怎么沟通或解决"></textarea></label><div class="modal-form-actions span-2"><button class="button button-outline" data-close-modal="issueModal" type="button">取消</button><button class="button button-primary" type="submit"><i data-lucide="save"></i>保存问题</button></div></form>
+        <p class="eyebrow">COMMUNICATION NOTES</p><h2 id="issueModalTitle">新增沟通记录</h2>
+        <form id="issueForm" class="form-grid"><input id="issueId" type="hidden" /><label>日期<input id="issueDate" type="date" required /></label><label>时间<input id="issueTime" type="time" required /></label><label class="span-2">沟通主题<input id="issueTitle" type="text" maxlength="80" required /></label><label class="span-2">问题与感受<textarea id="issueDescription" rows="4" maxlength="800" required></textarea></label><label class="span-2">建议的下一步<textarea id="issueProposal" rows="3" maxlength="500" placeholder="希望怎么沟通或解决"></textarea></label><div class="modal-form-actions span-2"><button class="button button-outline" data-close-modal="issueModal" type="button">取消</button><button class="button button-primary" type="submit"><i data-lucide="save"></i>保存沟通</button></div></form>
       </div>
     </div>
 

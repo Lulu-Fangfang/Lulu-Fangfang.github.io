@@ -3,7 +3,7 @@ const PASSWORD_HASH_KEYS = {
   recorder: "lulu-fangfang-password-recorder",
   reviewer: "lulu-fangfang-password-reviewer",
 };
-const DATA_VERSION = 4;
+const DATA_VERSION = 5;
 const SESSION_TIMEOUT_MS = 30 * 60 * 1000;
 const CLOUD_CONFIG = window.LULU_FANGFANG_CLOUD_CONFIG || null;
 const RECORD_STATUSES = ["未办", "进行中", "已办"];
@@ -60,6 +60,17 @@ const today = () => {
   const date = new Date();
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
 };
+const currentTime = () => {
+  const date = new Date();
+  return `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
+};
+
+function timeFromIso(value) {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  return `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
+}
 
 function clone(value) {
   return JSON.parse(JSON.stringify(value));
@@ -89,6 +100,7 @@ function normalizeData(saved) {
       ...record,
       id: record.id || `migrated-record-${index}`,
       date: record.date || today(),
+      time: record.time || timeFromIso(record.createdAt),
       title: record.title || record.situation || "未命名事项",
       category: record.category || record.tone || "共同约定",
       details: record.details || record.repair || "",
@@ -105,9 +117,9 @@ function normalizeData(saved) {
     records,
     wishes,
     redemptions: migratedRedemptions,
-    moments: Array.isArray(saved.moments) ? saved.moments.map((moment) => ({ imageIds: [], reviewStatus: "待复核", reviewedAt: "", createdBy: "recorder", ...moment })) : [],
+    moments: Array.isArray(saved.moments) ? saved.moments.map((moment) => ({ imageIds: [], reviewStatus: "待复核", reviewedAt: "", createdBy: "recorder", ...moment, time: moment.time || timeFromIso(moment.createdAt) })) : [],
     tasks: Array.isArray(saved.tasks) ? saved.tasks.map((task) => ({ createdBy: "recorder", ...task, done: Boolean(task.done), reviewed: Boolean(task.reviewed), reviewedAt: task.reviewedAt || "", createdAt: task.createdAt || `${task.date || "1970-01-01"}T00:00:00.000Z` })) : [],
-    issues: Array.isArray(saved.issues) ? saved.issues.map((issue) => ({ status: "待沟通", reviewedAt: "", proposal: "", createdBy: "recorder", ...issue })) : [],
+    issues: Array.isArray(saved.issues) ? saved.issues.map((issue) => ({ status: "待沟通", reviewedAt: "", proposal: "", createdBy: "recorder", ...issue, time: issue.time || timeFromIso(issue.createdAt) })) : [],
   };
 }
 
@@ -122,12 +134,15 @@ function loadData() {
   }
 }
 
-function saveData() {
+async function saveData() {
   data.version = DATA_VERSION;
   localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
-  if (!cloudContext || applyingRemoteState) return;
-  if (pendingLocalMigration) pendingLocalMigration = clone(data);
-  else queueCloudSave(clone(data));
+  if (!cloudContext || applyingRemoteState) return "local";
+  if (pendingLocalMigration) {
+    pendingLocalMigration = clone(data);
+    return "migration";
+  }
+  return (await queueCloudSave(clone(data))) ? "cloud" : "failed";
 }
 
 const MEDIA_DB_NAME = "lulu-fangfang-media-v1";
@@ -365,26 +380,27 @@ async function reloadCloudState({ notify = false } = {}) {
 }
 
 async function saveCloudSnapshot(snapshot, generation) {
-  if (!cloudContext || generation !== cloudSyncGeneration) return;
+  if (!cloudContext || generation !== cloudSyncGeneration) return false;
   setCloudSyncState("syncing", "正在上传最新修改");
   const { data: result, error } = await cloudClient.rpc("save_house_state", {
     p_payload: snapshot,
     p_expected_revision: cloudContext.revision,
   });
-  if (generation !== cloudSyncGeneration) return;
+  if (generation !== cloudSyncGeneration) return false;
   if (error) {
     if (error.code === "40001" || /SYNC_CONFLICT/i.test(error.message || "")) {
       cloudSyncGeneration += 1;
       await reloadCloudState();
       setCloudSyncState("error", "检测到其他设备先保存，已载入云端版本");
       toast("另一台设备刚刚更新了数据，已载入云端版本，请重新执行本次操作");
-      return;
+      return false;
     }
     throw error;
   }
   const saved = Array.isArray(result) ? result[0] : result;
   cloudContext.revision = Number(saved?.new_revision) || cloudContext.revision + 1;
   setCloudSyncState("synced", `云端已同步 · 版本 ${cloudContext.revision}`);
+  return true;
 }
 
 let cloudSyncGeneration = 0;
@@ -394,13 +410,16 @@ function queueCloudSave(snapshot) {
   cloudRetrySnapshot = snapshot;
   cloudSaveChain = cloudSaveChain
     .then(async () => {
-      await saveCloudSnapshot(snapshot, generation);
-      if (cloudRetrySnapshot === snapshot) cloudRetrySnapshot = null;
+      const saved = await saveCloudSnapshot(snapshot, generation);
+      if (saved && cloudRetrySnapshot === snapshot) cloudRetrySnapshot = null;
+      return saved;
     })
     .catch((error) => {
       setCloudSyncState("error", friendlyCloudError(error));
       toast("云端同步失败，本机缓存仍然保留");
+      return false;
     });
+  return cloudSaveChain;
 }
 
 function subscribeToCloudState() {
@@ -461,7 +480,8 @@ async function loginCloud(role, password) {
   if (!Object.keys(remotePayload).length && hasMeaningfulData(localSnapshot)) {
     pendingLocalMigration = localSnapshot;
     data = localSnapshot;
-    setCloudSyncState("migration", "云端为空，可将当前浏览器数据一键迁移");
+    setCloudSyncState("migration", "云端为空，正在迁移当前浏览器的历史数据");
+    await migrateLocalDataToCloud({ askConfirmation: false, automatic: true });
   } else {
     pendingLocalMigration = null;
     await applyCloudState(remotePayload, row.revision);
@@ -470,9 +490,9 @@ async function loginCloud(role, password) {
   return row.member_role;
 }
 
-async function migrateLocalDataToCloud() {
+async function migrateLocalDataToCloud({ askConfirmation = true, automatic = false } = {}) {
   if (!cloudContext || !pendingLocalMigration) return;
-  if (!confirm("确定把当前浏览器的所有记录和图片写入这个 Supabase 小家吗？")) return;
+  if (askConfirmation && !confirm("确定把当前浏览器的所有记录和图片写入这个 Supabase 小家吗？")) return;
   const snapshot = normalizeData(pendingLocalMigration);
   const media = await getAllMedia();
   setCloudSyncState("syncing", `正在上传 ${media.length} 张本机图片`);
@@ -481,11 +501,15 @@ async function migrateLocalDataToCloud() {
     pendingLocalMigration = null;
     data = snapshot;
     localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
-    await saveCloudSnapshot(clone(data), cloudSyncGeneration);
+    const saved = await saveCloudSnapshot(clone(data), cloudSyncGeneration);
+    if (!saved) throw new Error("首次云端迁移未完成");
     render();
-    toast("本机记录和图片已迁移到 Supabase");
+    toast(automatic ? "本机历史记录已自动同步到 Supabase" : "本机记录和图片已迁移到 Supabase");
   } catch (error) {
     pendingLocalMigration = snapshot;
+    data = snapshot;
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+    render();
     setCloudSyncState("error", friendlyCloudError(error));
     toast("迁移未完成，本机数据没有丢失");
   }
@@ -506,7 +530,11 @@ async function syncCloudNow() {
     await cloudSaveChain;
     if (cloudRetrySnapshot) {
       const retrySnapshot = clone(data);
-      await saveCloudSnapshot(retrySnapshot, cloudSyncGeneration);
+      const saved = await saveCloudSnapshot(retrySnapshot, cloudSyncGeneration);
+      if (!saved) {
+        toast("本次同步发生版本冲突，已载入另一台设备的最新数据");
+        return;
+      }
       cloudRetrySnapshot = null;
     }
     await reloadCloudState();
@@ -558,6 +586,26 @@ function formatDate(value, compact = false) {
   if (Number.isNaN(date.getTime())) return value;
   if (compact) return `${String(date.getMonth() + 1).padStart(2, "0")}/${String(date.getDate()).padStart(2, "0")}`;
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+}
+
+function formatDateTime(date, time, compact = false) {
+  const formattedDate = formatDate(date, compact);
+  return time ? `${formattedDate} ${time}` : formattedDate;
+}
+
+function saveResultMessage(message, result) {
+  if (result === "cloud") return `${message} · 已同步到云端`;
+  if (result === "migration") return `${message} · 正在等待首次云端迁移`;
+  if (result === "failed") return `${message} · 已保存在本机，但云端同步失败，请点击“立即同步”`;
+  return `${message} · 已保存在当前浏览器`;
+}
+
+async function commitDataChange(message) {
+  const savePromise = saveData();
+  render();
+  const result = await savePromise;
+  toast(saveResultMessage(message, result));
+  return result;
 }
 
 function isInCycle(record) {
@@ -621,6 +669,17 @@ function renderStats() {
   renderWeekTrend();
 }
 
+function renderModuleHub() {
+  const todayTasks = data.tasks.filter((task) => task.date === today()).length;
+  const pendingRecords = data.records.filter((record) => record.status !== "已办").length;
+  const completedRecords = data.records.filter((record) => record.status === "已办").length;
+  const openIssues = data.issues.filter((issue) => issue.status !== "已解决").length;
+  const solvedIssues = data.issues.filter((issue) => issue.status === "已解决").length;
+  $("#hubDailySummary").textContent = `美好 ${data.moments.length} 条 · 今日手账 ${todayTasks} 项`;
+  $("#hubRecordSummary").textContent = `待办 ${pendingRecords} 项 · 已办 ${completedRecords} 项`;
+  $("#hubIssueSummary").textContent = `待处理 ${openIssues} 条 · 已解决 ${solvedIssues} 条`;
+}
+
 function renderWeekTrend() {
   const days = [];
   for (let offset = 6; offset >= 0; offset -= 1) {
@@ -640,25 +699,25 @@ function renderWeekTrend() {
 
 function renderRecentRecords() {
   const target = $("#recentRecords");
-  const recent = [...data.records].sort((a, b) => b.date.localeCompare(a.date)).slice(0, 4);
+  const recent = [...data.records].sort((a, b) => `${b.date}T${b.time || "00:00"}`.localeCompare(`${a.date}T${a.time || "00:00"}`)).slice(0, 4);
   if (!recent.length) {
-    target.innerHTML = `<div class="empty-state"><i data-lucide="notebook-pen"></i><strong>还没有行为事项</strong><span>方方和路路登录后，都可以把约定或待办记在这里。</span></div>`;
+    target.innerHTML = `<div class="empty-state"><i data-lucide="notebook-pen"></i><strong>还没有事务记录</strong><span>方方和路路登录后，都可以把约定或待办记在这里。</span></div>`;
     return;
   }
-  target.innerHTML = recent.map((record) => `<div class="activity-item"><div class="activity-date">${formatDate(record.date, true).replace("/", "<br />")}</div><div><strong>${escapeHtml(record.title)}</strong><small>${escapeHtml(record.details || record.notes || `${creatorName(record)}记录`)}</small></div><span class="status-label ${statusClass(record.status)}">${escapeHtml(record.status)}</span></div>`).join("");
+  target.innerHTML = recent.map((record) => `<div class="activity-item"><div class="activity-date">${formatDate(record.date, true).replace("/", "<br />")}<small>${escapeHtml(record.time || "")}</small></div><div><strong>${escapeHtml(record.title)}</strong><small>${escapeHtml(record.details || record.notes || `${creatorName(record)}记录`)}</small></div><span class="status-label ${statusClass(record.status)}">${escapeHtml(record.status)}</span></div>`).join("");
 }
 
 function renderMoments() {
   const target = $("#momentsGrid");
-  const sorted = [...data.moments].sort((a, b) => `${b.date}-${b.id}`.localeCompare(`${a.date}-${a.id}`));
+  const sorted = [...data.moments].sort((a, b) => `${b.date}T${b.time || "00:00"}-${b.id}`.localeCompare(`${a.date}T${a.time || "00:00"}-${a.id}`));
   if (!sorted.length) {
     target.innerHTML = `<div class="empty-state module-empty"><i data-lucide="images"></i><strong>还没有美好记录</strong><span>方方和路路都可以写下第一件值得记住的小事。</span></div>`;
     return;
   }
   target.innerHTML = sorted.map((moment) => {
     const images = (moment.imageIds || []).map((id) => imageCache.get(id)).filter(Boolean);
-    const imageMarkup = images.length ? `<div class="moment-photo-grid count-${Math.min(images.length, 4)}">${images.map((image) => `<img src="${image.dataUrl}" alt="${escapeHtml(moment.title)}的照片" loading="lazy" />`).join("")}</div>` : `<div class="moment-no-photo"><i data-lucide="sun-medium"></i><span>${formatDate(moment.date, true)}</span></div>`;
-    return `<article class="moment-card">${imageMarkup}<div class="moment-content"><div class="moment-meta"><span>${formatDate(moment.date)} · ${creatorName(moment)}记录</span><span class="status-label ${statusClass(moment.reviewStatus)}">${escapeHtml(moment.reviewStatus || "待复核")}</span></div><h3>${escapeHtml(moment.title)}</h3>${moment.note ? `<p>${escapeHtml(moment.note)}</p>` : ""}<div class="moment-actions">${isReviewer() && moment.reviewStatus !== "已复核" ? `<button class="button button-outline" data-action="review-moment" data-id="${moment.id}" type="button"><i data-lucide="badge-check"></i>确认复核</button>` : ""}${canManageEntry(moment) ? `<div class="row-actions"><button class="icon-button" data-action="edit-moment" data-id="${moment.id}" title="编辑美好记录"><i data-lucide="pencil"></i></button><button class="icon-button danger" data-action="delete-moment" data-id="${moment.id}" title="删除美好记录"><i data-lucide="trash-2"></i></button></div>` : ""}</div></div></article>`;
+    const imageMarkup = images.length ? `<div class="moment-photo-grid count-${Math.min(images.length, 4)}">${images.map((image) => `<img src="${image.dataUrl}" alt="${escapeHtml(moment.title)}的照片" loading="lazy" />`).join("")}</div>` : `<div class="moment-no-photo"><i data-lucide="sun-medium"></i><span>${formatDateTime(moment.date, moment.time, true)}</span></div>`;
+    return `<article class="moment-card">${imageMarkup}<div class="moment-content"><div class="moment-meta"><span>${formatDateTime(moment.date, moment.time)} · ${creatorName(moment)}记录</span><span class="status-label ${statusClass(moment.reviewStatus)}">${escapeHtml(moment.reviewStatus || "待复核")}</span></div><h3>${escapeHtml(moment.title)}</h3>${moment.note ? `<p>${escapeHtml(moment.note)}</p>` : ""}<div class="moment-actions">${isReviewer() && moment.reviewStatus !== "已复核" ? `<button class="button button-outline" data-action="review-moment" data-id="${moment.id}" type="button"><i data-lucide="badge-check"></i>确认复核</button>` : ""}${canManageEntry(moment) ? `<div class="row-actions"><button class="icon-button" data-action="edit-moment" data-id="${moment.id}" title="编辑美好记录"><i data-lucide="pencil"></i></button><button class="icon-button danger" data-action="delete-moment" data-id="${moment.id}" title="删除美好记录"><i data-lucide="trash-2"></i></button></div>` : ""}</div></div></article>`;
   }).join("");
 }
 
@@ -674,19 +733,19 @@ function renderTasks() {
     target.innerHTML = `<div class="empty-state compact-empty"><i data-lucide="list-todo"></i><strong>清单还是空的</strong><span>方方和路路都可以添加当天要做的事情。</span></div>`;
     return;
   }
-  target.innerHTML = tasks.map((task) => `<div class="task-row ${task.done ? "is-done" : ""} ${task.reviewed ? "is-reviewed" : ""}"><button class="task-check" data-action="toggle-task" data-id="${task.id}" type="button" ${!canManageEntry(task) ? "disabled" : ""} aria-label="${task.done ? "标记为未完成" : "标记为已完成"}"><i data-lucide="${task.done ? "check" : "circle"}"></i></button><div class="task-main"><strong>${escapeHtml(task.title)}</strong><small>${creatorName(task)}记录 · ${task.reviewed ? `路路已复核 ${formatDate(task.reviewedAt)}` : task.done ? "等待路路复核" : "待完成"}</small></div><span class="status-label ${task.reviewed ? "confirmed" : task.done ? "progress" : ""}">${task.reviewed ? "已复核" : task.done ? "待复核" : "待完成"}</span><div class="task-actions">${isReviewer() && task.done && !task.reviewed ? `<button class="button button-outline" data-action="review-task" data-id="${task.id}" type="button"><i data-lucide="badge-check"></i>复核</button>` : ""}${canManageEntry(task) ? `<button class="icon-button danger" data-action="delete-task" data-id="${task.id}" title="删除任务"><i data-lucide="trash-2"></i></button>` : ""}</div></div>`).join("");
+  target.innerHTML = tasks.map((task) => `<div class="task-row ${task.done ? "is-done" : ""} ${task.reviewed ? "is-reviewed" : ""}"><button class="task-check" data-action="toggle-task" data-id="${task.id}" type="button" ${!canManageEntry(task) ? "disabled" : ""} aria-label="${task.done ? "标记为未完成" : "标记为已完成"}"><i data-lucide="${task.done ? "check" : "circle"}"></i></button><div class="task-main"><strong>${escapeHtml(task.title)}</strong><small>${timeFromIso(task.createdAt) || "--:--"} · ${creatorName(task)}记录 · ${task.reviewed ? `路路已复核 ${formatDate(task.reviewedAt)}` : task.done ? "等待路路复核" : "待完成"}</small></div><span class="status-label ${task.reviewed ? "confirmed" : task.done ? "progress" : ""}">${task.reviewed ? "已复核" : task.done ? "待复核" : "待完成"}</span><div class="task-actions">${isReviewer() && task.done && !task.reviewed ? `<button class="button button-outline" data-action="review-task" data-id="${task.id}" type="button"><i data-lucide="badge-check"></i>复核</button>` : ""}${canManageEntry(task) ? `<button class="icon-button danger" data-action="delete-task" data-id="${task.id}" title="删除任务"><i data-lucide="trash-2"></i></button>` : ""}</div></div>`).join("");
 }
 
 function renderIssues() {
   const target = $("#issueGrid");
-  const sorted = [...data.issues].sort((a, b) => `${b.date}-${b.id}`.localeCompare(`${a.date}-${a.id}`));
+  const sorted = [...data.issues].sort((a, b) => `${b.date}T${b.time || "00:00"}-${b.id}`.localeCompare(`${a.date}T${a.time || "00:00"}-${a.id}`));
   const counts = { open: sorted.filter((item) => item.status !== "已解决").length, talking: sorted.filter((item) => item.status === "沟通中").length, solved: sorted.filter((item) => item.status === "已解决").length };
   $("#issueSummary").innerHTML = `<div><span>待处理</span><strong>${counts.open}</strong></div><div><span>沟通中</span><strong>${counts.talking}</strong></div><div><span>已解决</span><strong>${counts.solved}</strong></div>`;
   if (!sorted.length) {
-    target.innerHTML = `<div class="empty-state module-empty"><i data-lucide="messages-square"></i><strong>目前没有问题记录</strong><span>有需要沟通的事情时，先把事实和期望写清楚。</span></div>`;
+    target.innerHTML = `<div class="empty-state module-empty"><i data-lucide="messages-square"></i><strong>目前没有沟通记录</strong><span>有需要沟通的事情时，先把事实、感受和期望写清楚。</span></div>`;
     return;
   }
-  target.innerHTML = sorted.map((issue) => `<article class="issue-card ${issue.status === "已解决" ? "is-solved" : ""}"><div class="issue-card-head"><div><span>${formatDate(issue.date)} · ${creatorName(issue)}记录</span><h3>${escapeHtml(issue.title)}</h3></div><span class="status-label ${statusClass(issue.status)}">${escapeHtml(issue.status)}</span></div><div class="issue-block"><small>问题与感受</small><p>${escapeHtml(issue.description)}</p></div>${issue.proposal ? `<div class="issue-block proposal"><small>建议的下一步</small><p>${escapeHtml(issue.proposal)}</p></div>` : ""}<div class="issue-actions">${isReviewer() && issue.status === "待沟通" ? `<button class="button button-outline" data-action="update-issue" data-status="沟通中" data-id="${issue.id}"><i data-lucide="messages-square"></i>开始沟通</button>` : ""}${isReviewer() && issue.status !== "已解决" ? `<button class="button button-primary" data-action="update-issue" data-status="已解决" data-id="${issue.id}"><i data-lucide="badge-check"></i>确认解决</button>` : ""}${canManageEntry(issue) ? `<div class="row-actions"><button class="icon-button" data-action="edit-issue" data-id="${issue.id}" title="编辑问题"><i data-lucide="pencil"></i></button><button class="icon-button danger" data-action="delete-issue" data-id="${issue.id}" title="删除问题"><i data-lucide="trash-2"></i></button></div>` : ""}</div></article>`).join("");
+  target.innerHTML = sorted.map((issue) => `<article class="issue-card ${issue.status === "已解决" ? "is-solved" : ""}"><div class="issue-card-head"><div><span>${formatDateTime(issue.date, issue.time)} · ${creatorName(issue)}记录</span><h3>${escapeHtml(issue.title)}</h3></div><span class="status-label ${statusClass(issue.status)}">${escapeHtml(issue.status)}</span></div><div class="issue-block"><small>问题与感受</small><p>${escapeHtml(issue.description)}</p></div>${issue.proposal ? `<div class="issue-block proposal"><small>建议的下一步</small><p>${escapeHtml(issue.proposal)}</p></div>` : ""}<div class="issue-actions">${isReviewer() && issue.status === "待沟通" ? `<button class="button button-outline" data-action="update-issue" data-status="沟通中" data-id="${issue.id}"><i data-lucide="messages-square"></i>开始沟通</button>` : ""}${isReviewer() && issue.status !== "已解决" ? `<button class="button button-primary" data-action="update-issue" data-status="已解决" data-id="${issue.id}"><i data-lucide="badge-check"></i>确认解决</button>` : ""}${canManageEntry(issue) ? `<div class="row-actions"><button class="icon-button" data-action="edit-issue" data-id="${issue.id}" title="编辑沟通"><i data-lucide="pencil"></i></button><button class="icon-button danger" data-action="delete-issue" data-id="${issue.id}" title="删除沟通"><i data-lucide="trash-2"></i></button></div>` : ""}</div></article>`).join("");
 }
 
 function renderWishPreview() {
@@ -709,15 +768,15 @@ function renderRecords() {
     .filter((record) => !recordFilters.cycleOnly || isInCycle(record))
     .filter((record) => recordFilters.status === "all" || record.status === recordFilters.status)
     .filter((record) => !query || [record.title, record.category, record.details, record.notes, record.status, creatorName(record)].some((value) => String(value || "").toLowerCase().includes(query)))
-    .sort((a, b) => b.date.localeCompare(a.date));
+    .sort((a, b) => `${b.date}T${b.time || "00:00"}`.localeCompare(`${a.date}T${a.time || "00:00"}`));
   $("#recordResultCount").textContent = filtered.length;
   if (!filtered.length) {
     const hasFilters = recordFilters.query || recordFilters.status !== "all" || recordFilters.cycleOnly;
-    target.innerHTML = `<div class="empty-state"><i data-lucide="${hasFilters ? "search-x" : "notebook-pen"}"></i><strong>${hasFilters ? "没有符合条件的事项" : "还没有行为事项"}</strong><span>${hasFilters ? "调整搜索词或筛选条件后再试。" : "任一身份登录后，都可以新增一项共同待办。"}</span></div>`;
+    target.innerHTML = `<div class="empty-state"><i data-lucide="${hasFilters ? "search-x" : "notebook-pen"}"></i><strong>${hasFilters ? "没有符合条件的事务" : "还没有事务记录"}</strong><span>${hasFilters ? "调整搜索词或筛选条件后再试。" : "任一身份登录后，都可以新增一项共同待办。"}</span></div>`;
     return;
   }
-  const header = `<div class="record-row record-header"><div class="record-cell">状态</div><div class="record-cell">计划日期</div><div class="record-cell">事项</div><div class="record-cell">分类</div><div class="record-cell">执行说明</div><div class="record-cell">记录人</div><div class="record-cell">操作</div></div>`;
-  const rows = filtered.map((record) => `<div class="record-row ${record.status === "已办" ? "is-done" : ""}"><div class="record-cell record-state-cell" data-label="状态"><button class="record-check" data-action="toggle-record" data-id="${record.id}" type="button" ${!canManageEntry(record) ? "disabled" : ""} aria-label="${record.status === "已办" ? "恢复为未办" : "标记为已办"}"><i data-lucide="${record.status === "已办" ? "check" : "circle"}"></i></button><span class="status-label ${statusClass(record.status)}">${escapeHtml(record.status)}</span></div><div class="record-cell record-date" data-label="计划日期">${formatDate(record.date)}</div><div class="record-cell situation" data-label="事项"><strong>${escapeHtml(record.title)}</strong><small>${escapeHtml(record.notes || "")}</small></div><div class="record-cell" data-label="分类"><span class="status-label">${escapeHtml(record.category)}</span></div><div class="record-cell repair" data-label="执行说明"><small>${escapeHtml(record.details || "暂无补充")}</small></div><div class="record-cell" data-label="记录人"><small>${creatorName(record)}</small></div><div class="record-cell action-cell" data-label="操作">${recordActions(record)}</div></div>`).join("");
+  const header = `<div class="record-row record-header"><div class="record-cell">状态</div><div class="record-cell">计划时间</div><div class="record-cell">事项</div><div class="record-cell">分类</div><div class="record-cell">执行说明</div><div class="record-cell">记录人</div><div class="record-cell">操作</div></div>`;
+  const rows = filtered.map((record) => `<div class="record-row ${record.status === "已办" ? "is-done" : ""}"><div class="record-cell record-state-cell" data-label="状态"><button class="record-check" data-action="toggle-record" data-id="${record.id}" type="button" ${!canManageEntry(record) ? "disabled" : ""} aria-label="${record.status === "已办" ? "恢复为未办" : "标记为已办"}"><i data-lucide="${record.status === "已办" ? "check" : "circle"}"></i></button><span class="status-label ${statusClass(record.status)}">${escapeHtml(record.status)}</span></div><div class="record-cell record-date" data-label="计划时间">${formatDateTime(record.date, record.time)}</div><div class="record-cell situation" data-label="事项"><strong>${escapeHtml(record.title)}</strong><small>${escapeHtml(record.notes || "")}</small></div><div class="record-cell" data-label="分类"><span class="status-label">${escapeHtml(record.category)}</span></div><div class="record-cell repair" data-label="执行说明"><small>${escapeHtml(record.details || "暂无补充")}</small></div><div class="record-cell" data-label="记录人"><small>${creatorName(record)}</small></div><div class="record-cell action-cell" data-label="操作">${recordActions(record)}</div></div>`).join("");
   target.innerHTML = header + rows;
 }
 
@@ -818,6 +877,7 @@ function renderView() {
 
 function render() {
   renderStats();
+  renderModuleHub();
   renderRecentRecords();
   renderMoments();
   renderTasks();
@@ -992,10 +1052,11 @@ function checkAdminSession() {
 
 function openRecordEditor(id = "") {
   const record = data.records.find((item) => item.id === id);
-  if (record ? !requireEntryAccess(record, "编辑") : !requireContributor("新增行为事项")) return;
-  $("#recordModalTitle").textContent = record ? "编辑行为事项" : "新增行为事项";
+  if (record ? !requireEntryAccess(record, "编辑") : !requireContributor("新增事务")) return;
+  $("#recordModalTitle").textContent = record ? "编辑事务" : "新增事务";
   $("#recordId").value = record?.id || "";
   $("#recordDate").value = record?.date || today();
+  $("#recordTime").value = record?.time || currentTime();
   $("#recordCategory").value = record?.category || "共同约定";
   $("#recordTitle").value = record?.title || "";
   $("#recordDetails").value = record?.details || "";
@@ -1028,6 +1089,7 @@ function openMomentEditor(id = "") {
   $("#momentModalTitle").textContent = moment ? "编辑美好记录" : "记录一件美好小事";
   $("#momentId").value = moment?.id || "";
   $("#momentDate").value = moment?.date || today();
+  $("#momentTime").value = moment?.time || currentTime();
   $("#momentTitle").value = moment?.title || "";
   $("#momentNote").value = moment?.note || "";
   $("#momentImages").value = "";
@@ -1040,28 +1102,27 @@ function openMomentEditor(id = "") {
 
 function openIssueEditor(id = "") {
   const issue = data.issues.find((item) => item.id === id);
-  if (issue ? !requireEntryAccess(issue, "编辑") : !requireContributor("记录当前问题")) return;
-  $("#issueModalTitle").textContent = issue ? "编辑问题记录" : "记录当前问题";
+  if (issue ? !requireEntryAccess(issue, "编辑") : !requireContributor("新增沟通记录")) return;
+  $("#issueModalTitle").textContent = issue ? "编辑沟通记录" : "新增沟通记录";
   $("#issueId").value = issue?.id || "";
   $("#issueDate").value = issue?.date || today();
+  $("#issueTime").value = issue?.time || currentTime();
   $("#issueTitle").value = issue?.title || "";
   $("#issueDescription").value = issue?.description || "";
   $("#issueProposal").value = issue?.proposal || "";
   openModal("issueModal");
 }
 
-function updateIssue(id, status) {
+async function updateIssue(id, status) {
   if (!requireRole("reviewer", "复核问题状态")) return;
   const issue = data.issues.find((item) => item.id === id);
   if (!issue) return;
   issue.status = status;
   issue.reviewedAt = today();
-  saveData();
-  render();
-  toast(status === "已解决" ? "问题已确认解决" : "问题已进入沟通中");
+  await commitDataChange(status === "已解决" ? "沟通已确认解决" : "沟通已进入处理中");
 }
 
-function toggleTask(id) {
+async function toggleTask(id) {
   const task = data.tasks.find((item) => item.id === id);
   if (!task || !requireEntryAccess(task, "更新")) return;
   task.done = !task.done;
@@ -1069,44 +1130,36 @@ function toggleTask(id) {
     task.reviewed = false;
     task.reviewedAt = "";
   }
-  saveData();
-  render();
-  toast(task.done ? "任务已完成，等待路路复核" : "任务已恢复为待完成");
+  await commitDataChange(task.done ? "任务已完成，等待路路复核" : "任务已恢复为待完成");
 }
 
-function toggleRecord(id) {
+async function toggleRecord(id) {
   const record = data.records.find((item) => item.id === id);
   if (!record || !requireEntryAccess(record, "更新")) return;
   record.status = record.status === "已办" ? "未办" : "已办";
   record.completedAt = record.status === "已办" ? today() : "";
-  saveData();
-  render();
-  toast(record.status === "已办" ? "事项已标记为已办" : "事项已恢复为未办");
+  await commitDataChange(record.status === "已办" ? "事务已标记为已办" : "事务已恢复为未办");
 }
 
-function reviewTask(id) {
+async function reviewTask(id) {
   if (!requireRole("reviewer", "复核手账任务")) return;
   const task = data.tasks.find((item) => item.id === id);
   if (!task || !task.done) return;
   task.reviewed = true;
   task.reviewedAt = today();
-  saveData();
-  render();
-  toast("手账任务已复核");
+  await commitDataChange("手账任务已复核");
 }
 
-function reviewMoment(id) {
+async function reviewMoment(id) {
   if (!requireRole("reviewer", "复核美好记录")) return;
   const moment = data.moments.find((item) => item.id === id);
   if (!moment) return;
   moment.reviewStatus = "已复核";
   moment.reviewedAt = today();
-  saveData();
-  render();
-  toast("美好记录已复核");
+  await commitDataChange("美好记录已复核");
 }
 
-function redeemWish(id) {
+async function redeemWish(id) {
   if (!requireRole("reviewer", "兑换心愿")) return;
   const wish = data.wishes.find((item) => item.id === id);
   const m = metrics();
@@ -1116,20 +1169,16 @@ function redeemWish(id) {
   }
   if (!confirm(`确定兑换“${wish.title}”吗？这会使用 1 份心愿余额。`)) return;
   data.redemptions.push({ id: `redemption-${Date.now()}`, wishId: wish.id, wishTitle: wish.title, redeemedAt: today(), completedAt: "", status: "待完成" });
-  saveData();
-  render();
-  toast("心愿已登记，记得完成后确认");
+  await commitDataChange("心愿已登记，记得完成后确认");
 }
 
-function completeRedemption(id) {
+async function completeRedemption(id) {
   if (!requireRole("reviewer", "确认兑换完成")) return;
   const item = data.redemptions.find((entry) => entry.id === id);
   if (!item) return;
   item.status = "已完成";
   item.completedAt = today();
-  saveData();
-  render();
-  toast("这份心愿已确认完成");
+  await commitDataChange("这份心愿已确认完成");
 }
 
 function downloadText(filename, content, type) {
@@ -1160,8 +1209,8 @@ function csvCell(value) {
 
 function exportRecordsCsv() {
   if (!requireAdmin("导出记录")) return;
-  const rows = [["计划日期", "事项", "分类", "执行说明", "状态", "记录人", "完成日期", "备注"], ...[...data.records].sort((a, b) => b.date.localeCompare(a.date)).map((record) => [record.date, record.title, record.category, record.details, record.status, creatorName(record), record.completedAt || "", record.notes || ""])];
-  downloadText(`行为事项台账-${today()}.csv`, `\uFEFF${rows.map((row) => row.map(csvCell).join(",")).join("\r\n")}`, "text/csv;charset=utf-8");
+  const rows = [["计划日期", "计划时间", "事项", "分类", "执行说明", "状态", "记录人", "完成日期", "备注"], ...[...data.records].sort((a, b) => `${b.date}T${b.time || "00:00"}`.localeCompare(`${a.date}T${a.time || "00:00"}`)).map((record) => [record.date, record.time || "", record.title, record.category, record.details, record.status, creatorName(record), record.completedAt || "", record.notes || ""])];
+  downloadText(`事务记录台账-${today()}.csv`, `\uFEFF${rows.map((row) => row.map(csvCell).join(",")).join("\r\n")}`, "text/csv;charset=utf-8");
   toast("CSV 已下载");
 }
 
@@ -1171,29 +1220,25 @@ function importBackup() {
   $("#importFile").click();
 }
 
-function handleImport(file) {
-  const reader = new FileReader();
-  reader.onload = async () => {
-    try {
-      const parsed = JSON.parse(reader.result);
-      const incoming = parsed.data || parsed;
-      if (!incoming || !Array.isArray(incoming.records) || !Array.isArray(incoming.wishes) || !incoming.settings) throw new Error("invalid");
-      data = normalizeData(incoming);
-      if (Array.isArray(parsed.media)) {
-        await clearAllMedia();
-        for (const item of parsed.media) {
-          if (item && typeof item.id === "string" && typeof item.dataUrl === "string" && item.dataUrl.startsWith("data:image/")) await putMedia(item);
-        }
+async function handleImport(file) {
+  try {
+    const parsed = JSON.parse(await file.text());
+    const incoming = parsed.data || parsed;
+    if (!incoming || !Array.isArray(incoming.records) || !Array.isArray(incoming.wishes) || !incoming.settings) throw new Error("invalid");
+    data = normalizeData(incoming);
+    if (Array.isArray(parsed.media)) {
+      await clearAllMedia();
+      for (const item of parsed.media) {
+        if (item && typeof item.id === "string" && typeof item.dataUrl === "string" && item.dataUrl.startsWith("data:image/")) await putMedia(item);
       }
-      saveData();
-      await hydrateMediaCache();
-      render();
-      toast("备份已导入");
-    } catch (error) {
-      toast(error?.message === "invalid" ? "导入失败：文件格式不正确" : "导入失败：数据或图片未能完整写入");
     }
-  };
-  reader.readAsText(file);
+    const result = await saveData();
+    await hydrateMediaCache();
+    render();
+    toast(saveResultMessage("备份已导入", result));
+  } catch (error) {
+    toast(error?.message === "invalid" ? "导入失败：文件格式不正确" : "导入失败：数据或图片未能完整写入");
+  }
 }
 
 document.addEventListener("click", async (event) => {
@@ -1210,7 +1255,7 @@ document.addEventListener("click", async (event) => {
   const action = actionElement.dataset.action;
   if (action === "new-moment") openMomentEditor();
   if (action === "edit-moment") openMomentEditor(actionElement.dataset.id);
-  if (action === "review-moment") reviewMoment(actionElement.dataset.id);
+  if (action === "review-moment") await reviewMoment(actionElement.dataset.id);
   if (action === "remove-moment-image") {
     if (actionElement.dataset.kind === "existing") editingMomentImageIds = editingMomentImageIds.filter((id) => id !== actionElement.dataset.id);
     else pendingMomentImages.splice(Number(actionElement.dataset.id), 1);
@@ -1219,53 +1264,56 @@ document.addEventListener("click", async (event) => {
   if (action === "delete-moment") {
     const moment = data.moments.find((item) => item.id === actionElement.dataset.id);
     if (!moment || !requireEntryAccess(moment, "删除") || !confirm("确定删除这条美好记录和其中的照片吗？")) return;
-    for (const id of moment?.imageIds || []) await deleteMedia(id).catch(() => {});
+    const removedImageIds = [...(moment.imageIds || [])];
     data.moments = data.moments.filter((item) => item.id !== actionElement.dataset.id);
-    saveData(); render(); toast("美好记录已删除");
+    const result = await commitDataChange("美好记录已删除");
+    if (result !== "failed") {
+      for (const id of removedImageIds) await deleteMedia(id).catch(() => {});
+    }
   }
-  if (action === "toggle-task") toggleTask(actionElement.dataset.id);
-  if (action === "review-task") reviewTask(actionElement.dataset.id);
+  if (action === "toggle-task") await toggleTask(actionElement.dataset.id);
+  if (action === "review-task") await reviewTask(actionElement.dataset.id);
   if (action === "delete-task") {
     const task = data.tasks.find((item) => item.id === actionElement.dataset.id);
     if (!task || !requireEntryAccess(task, "删除") || !confirm("确定删除这项任务吗？")) return;
     data.tasks = data.tasks.filter((item) => item.id !== actionElement.dataset.id);
-    saveData(); render(); toast("任务已删除");
+    await commitDataChange("任务已删除");
   }
   if (action === "new-record") openRecordEditor();
   if (action === "edit-record") openRecordEditor(actionElement.dataset.id);
-  if (action === "toggle-record") toggleRecord(actionElement.dataset.id);
+  if (action === "toggle-record") await toggleRecord(actionElement.dataset.id);
   if (action === "delete-record") {
     const record = data.records.find((item) => item.id === actionElement.dataset.id);
-    if (!record || !requireEntryAccess(record, "删除") || !confirm("确定删除这项行为事项吗？")) return;
+    if (!record || !requireEntryAccess(record, "删除") || !confirm("确定删除这项事务吗？")) return;
     data.records = data.records.filter((record) => record.id !== actionElement.dataset.id);
-    saveData(); render(); toast("行为事项已删除");
+    await commitDataChange("事务已删除");
   }
   if (action === "new-issue") openIssueEditor();
   if (action === "edit-issue") openIssueEditor(actionElement.dataset.id);
-  if (action === "update-issue") updateIssue(actionElement.dataset.id, actionElement.dataset.status);
+  if (action === "update-issue") await updateIssue(actionElement.dataset.id, actionElement.dataset.status);
   if (action === "delete-issue") {
     const issue = data.issues.find((item) => item.id === actionElement.dataset.id);
-    if (!issue || !requireEntryAccess(issue, "删除") || !confirm("确定删除这条问题沟通记录吗？")) return;
+    if (!issue || !requireEntryAccess(issue, "删除") || !confirm("确定删除这条沟通记录吗？")) return;
     data.issues = data.issues.filter((item) => item.id !== actionElement.dataset.id);
-    saveData(); render(); toast("问题记录已删除");
+    await commitDataChange("沟通记录已删除");
   }
   if (action === "new-wish") openWishEditor();
   if (action === "edit-wish") openWishEditor(actionElement.dataset.id);
-  if (action === "redeem-wish") redeemWish(actionElement.dataset.id);
+  if (action === "redeem-wish") await redeemWish(actionElement.dataset.id);
   if (action === "delete-wish" && requireRole("reviewer", "删除心愿") && confirm("确定删除这份心愿吗？已有兑换流水会继续保留。")) {
     data.wishes = data.wishes.filter((wish) => wish.id !== actionElement.dataset.id);
-    saveData(); render(); toast("心愿已删除");
+    await commitDataChange("心愿已删除");
   }
-  if (action === "complete-redemption") completeRedemption(actionElement.dataset.id);
+  if (action === "complete-redemption") await completeRedemption(actionElement.dataset.id);
   if (action === "delete-redemption" && requireRole("reviewer", "撤销兑换") && confirm("确定撤销这次兑换吗？对应的 1 份心愿余额会恢复。")) {
     data.redemptions = data.redemptions.filter((item) => item.id !== actionElement.dataset.id);
-    saveData(); render(); toast("兑换已撤销，余额已恢复");
+    await commitDataChange("兑换已撤销，余额已恢复");
   }
   if (action === "export") exportBackup();
   if (action === "export-csv") exportRecordsCsv();
   if (action === "import") importBackup();
-  if (action === "migrate-cloud") migrateLocalDataToCloud();
-  if (action === "sync-cloud") syncCloudNow();
+  if (action === "migrate-cloud") await migrateLocalDataToCloud();
+  if (action === "sync-cloud") await syncCloudNow();
   if (action === "logout") logout();
   if (action === "reset-password" && !cloudSchemaReady && confirm("只重置当前所选身份在这个浏览器中的密码，不会删除数据。确定继续吗？")) resetLocalPassword();
   if (action === "change-password" && requireAdmin("修改密码")) {
@@ -1307,9 +1355,9 @@ $("#authForm").addEventListener("submit", async (event) => {
   }
 });
 
-$("#recordForm").addEventListener("submit", (event) => {
+$("#recordForm").addEventListener("submit", async (event) => {
   event.preventDefault();
-  if (!requireContributor("保存行为事项")) return;
+  if (!requireContributor("保存事务")) return;
   const id = $("#recordId").value || `record-${Date.now()}`;
   const existingIndex = data.records.findIndex((item) => item.id === id);
   const existing = existingIndex >= 0 ? data.records[existingIndex] : null;
@@ -1318,6 +1366,7 @@ $("#recordForm").addEventListener("submit", (event) => {
   const record = {
     id,
     date: $("#recordDate").value,
+    time: $("#recordTime").value,
     title: $("#recordTitle").value.trim(),
     category: $("#recordCategory").value,
     details: $("#recordDetails").value.trim(),
@@ -1329,7 +1378,8 @@ $("#recordForm").addEventListener("submit", (event) => {
   };
   if (existingIndex >= 0) data.records[existingIndex] = record;
   else data.records.push(record);
-  saveData(); closeModal("recordModal"); render(); toast(existingIndex >= 0 ? "行为事项已更新" : "行为事项已加入台账");
+  closeModal("recordModal");
+  await commitDataChange(existingIndex >= 0 ? "事务已更新" : "事务已加入台账");
 });
 
 $("#momentImages").addEventListener("change", async (event) => {
@@ -1359,22 +1409,26 @@ $("#momentForm").addEventListener("submit", async (event) => {
   if (existing && !requireEntryAccess(existing, "编辑")) return;
   try {
     for (const image of pendingMomentImages) await putMedia(image);
-    for (const removedId of originalMomentImageIds.filter((imageId) => !editingMomentImageIds.includes(imageId))) await deleteMedia(removedId);
   } catch (error) {
     setCloudSyncState("error", friendlyCloudError(error));
     toast("图片未能完整保存，请检查网络后重试");
     return;
   }
-  const moment = { id, date: $("#momentDate").value, title: $("#momentTitle").value.trim(), note: $("#momentNote").value.trim(), imageIds: [...editingMomentImageIds, ...pendingMomentImages.map((image) => image.id)], reviewStatus: "待复核", reviewedAt: "", createdBy: existing?.createdBy || currentRole };
+  const removedImageIds = originalMomentImageIds.filter((imageId) => !editingMomentImageIds.includes(imageId));
+  const moment = { id, date: $("#momentDate").value, time: $("#momentTime").value, title: $("#momentTitle").value.trim(), note: $("#momentNote").value.trim(), imageIds: [...editingMomentImageIds, ...pendingMomentImages.map((image) => image.id)], reviewStatus: "待复核", reviewedAt: "", createdBy: existing?.createdBy || currentRole, createdAt: existing?.createdAt || new Date().toISOString() };
   if (existingIndex >= 0) data.moments[existingIndex] = moment;
   else data.moments.push(moment);
   pendingMomentImages = [];
   editingMomentImageIds = [];
   originalMomentImageIds = [];
-  saveData(); closeModal("momentModal"); render(); toast(existingIndex >= 0 ? "美好记录已更新，等待重新复核" : "美好记录已保存");
+  closeModal("momentModal");
+  const result = await commitDataChange(existingIndex >= 0 ? "美好记录已更新，等待重新复核" : "美好记录已保存");
+  if (result !== "failed") {
+    for (const removedId of removedImageIds) await deleteMedia(removedId).catch(() => {});
+  }
 });
 
-$("#taskQuickForm").addEventListener("submit", (event) => {
+$("#taskQuickForm").addEventListener("submit", async (event) => {
   event.preventDefault();
   if (!requireContributor("添加手账任务")) return;
   const title = $("#taskTitleInput").value.trim();
@@ -1382,7 +1436,7 @@ $("#taskQuickForm").addEventListener("submit", (event) => {
   const date = $("#taskDateFilter").value || today();
   data.tasks.push({ id: `task-${Date.now()}`, date, title, done: false, reviewed: false, reviewedAt: "", createdAt: new Date().toISOString(), createdBy: currentRole });
   $("#taskTitleInput").value = "";
-  saveData(); render(); toast("任务已加入手账");
+  await commitDataChange("任务已加入手账");
 });
 
 $("#taskDateFilter").addEventListener("change", () => {
@@ -1390,20 +1444,21 @@ $("#taskDateFilter").addEventListener("change", () => {
   refreshIcons();
 });
 
-$("#issueForm").addEventListener("submit", (event) => {
+$("#issueForm").addEventListener("submit", async (event) => {
   event.preventDefault();
-  if (!requireContributor("保存问题记录")) return;
+  if (!requireContributor("保存沟通记录")) return;
   const id = $("#issueId").value || `issue-${Date.now()}`;
   const existingIndex = data.issues.findIndex((item) => item.id === id);
   const existing = existingIndex >= 0 ? data.issues[existingIndex] : null;
   if (existing && !requireEntryAccess(existing, "编辑")) return;
-  const issue = { id, date: $("#issueDate").value, title: $("#issueTitle").value.trim(), description: $("#issueDescription").value.trim(), proposal: $("#issueProposal").value.trim(), status: existing?.status || "待沟通", reviewedAt: existing?.reviewedAt || "", createdBy: existing?.createdBy || currentRole };
+  const issue = { id, date: $("#issueDate").value, time: $("#issueTime").value, title: $("#issueTitle").value.trim(), description: $("#issueDescription").value.trim(), proposal: $("#issueProposal").value.trim(), status: existing?.status || "待沟通", reviewedAt: existing?.reviewedAt || "", createdBy: existing?.createdBy || currentRole, createdAt: existing?.createdAt || new Date().toISOString() };
   if (existingIndex >= 0) data.issues[existingIndex] = issue;
   else data.issues.push(issue);
-  saveData(); closeModal("issueModal"); render(); toast(existingIndex >= 0 ? "问题记录已更新" : "问题已记录，等待沟通");
+  closeModal("issueModal");
+  await commitDataChange(existingIndex >= 0 ? "沟通记录已更新" : "沟通记录已保存，等待处理");
 });
 
-$("#wishForm").addEventListener("submit", (event) => {
+$("#wishForm").addEventListener("submit", async (event) => {
   event.preventDefault();
   if (!requireRole("reviewer", "保存心愿")) return;
   const id = $("#wishId").value || `wish-${Date.now()}`;
@@ -1411,16 +1466,17 @@ $("#wishForm").addEventListener("submit", (event) => {
   const existingIndex = data.wishes.findIndex((item) => item.id === id);
   if (existingIndex >= 0) data.wishes[existingIndex] = wish;
   else data.wishes.push(wish);
-  saveData(); closeModal("wishModal"); render(); toast(existingIndex >= 0 ? "心愿已更新" : "心愿已保存");
+  closeModal("wishModal");
+  await commitDataChange(existingIndex >= 0 ? "心愿已更新" : "心愿已保存");
 });
 
-$("#settingsForm").addEventListener("submit", (event) => {
+$("#settingsForm").addEventListener("submit", async (event) => {
   event.preventDefault();
   if (!requireRole("reviewer", "保存规则")) return;
   data.settings.threshold = Math.max(1, Number($("#thresholdInput").value) || 1);
   data.settings.periodStart = $("#periodStartInput").value || today();
   data.settings.agreement = $("#agreementInput").value.trim() || defaultData.settings.agreement;
-  saveData(); render(); toast("规则已保存");
+  await commitDataChange("规则已保存");
 });
 
 $("#passwordForm").addEventListener("submit", async (event) => {
@@ -1453,9 +1509,9 @@ $("#passwordForm").addEventListener("submit", async (event) => {
   }
 });
 
-$("#importFile").addEventListener("change", (event) => {
+$("#importFile").addEventListener("change", async (event) => {
   const [file] = event.target.files;
-  if (file) handleImport(file);
+  if (file) await handleImport(file);
   event.target.value = "";
 });
 
@@ -1513,6 +1569,7 @@ async function initialize() {
   render();
   await initializeCloud();
   render();
+  if (cloudSchemaReady && !isAdmin) openModal("authModal");
 }
 
 initialize();
