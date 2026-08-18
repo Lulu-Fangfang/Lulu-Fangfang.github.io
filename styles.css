@@ -414,6 +414,8 @@ input:not(:disabled):focus, select:not(:disabled):focus, textarea:not(:disabled)
 .heart-fireworks { position: fixed; z-index: 75; inset: 0; overflow: hidden; pointer-events: none; }
 .heart-firework-burst { position: absolute; left: var(--burst-x); top: var(--burst-y); width: 0; height: 0; }
 .heart-firework-ring { position: absolute; left: 0; top: 0; width: 18px; height: 18px; border: 2px solid rgba(238,124,104,.72); border-radius: 50%; opacity: 0; animation: heartFireworkRing .75s ease-out forwards; }
+.heart-firework-burst.is-fangfang .heart-firework-ring { border-color: rgba(95,189,180,.82); }
+.heart-firework-ring-soft { width: 11px; height: 11px; border-color: rgba(240,143,121,.8) !important; animation-delay: .1s; }
 .heart-firework-particle { position: absolute; left: 0; top: 0; display: grid; place-items: center; width: var(--firework-size); height: var(--firework-size); color: var(--firework-color); opacity: 0; filter: drop-shadow(0 4px 7px rgba(66,32,45,.18)); animation: heartFireworkBurst 1.25s cubic-bezier(.12,.7,.28,1) var(--firework-delay) forwards; }
 .heart-firework-particle svg { width: 100%; height: 100%; fill: currentColor; stroke-width: 1.35; }
 @keyframes heartFireworkRing { 0% { opacity: .9; transform: translate(-50%,-50%) scale(.2); } 100% { opacity: 0; transform: translate(-50%,-50%) scale(5.4); } }

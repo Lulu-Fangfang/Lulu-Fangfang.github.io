@@ -1208,25 +1208,32 @@ function showLoveCelebration() {
   }, 5200);
 }
 
-function showHeartFirework(x, y) {
+function showHeartFirework(x, y, role = currentRole) {
   const layer = $("#heartFireworks");
   if (!layer) return;
   while (layer.childElementCount >= 8) layer.firstElementChild?.remove();
+  const fangfang = role === "recorder";
   const burst = document.createElement("span");
   burst.className = "heart-firework-burst";
+  burst.classList.toggle("is-fangfang", fangfang);
   burst.style.setProperty("--burst-x", `${x}px`);
   burst.style.setProperty("--burst-y", `${y}px`);
-  burst.innerHTML = '<span class="heart-firework-ring"></span>';
+  burst.innerHTML = `<span class="heart-firework-ring"></span>${fangfang ? '<span class="heart-firework-ring heart-firework-ring-soft"></span>' : ""}`;
   const qixi = isQixiActive();
-  const colors = qixi
-    ? ["#ee7c68", "#f2a38f", "#ffd166", "#fff4cf", "#0f817c", "#f5c8bd"]
-    : ["#ee7c68", "#f2a38f", "#d69c25", "#0f817c", "#f5c8bd"];
+  const colors = fangfang
+    ? qixi
+      ? ["#f08f79", "#ffd166", "#5fbdb4", "#f8b8ad", "#fff4cf"]
+      : ["#f08f79", "#5fbdb4", "#f8b8ad", "#d69c25", "#a8ddd5"]
+    : qixi
+      ? ["#ee7c68", "#f2a38f", "#ffd166", "#fff4cf", "#0f817c", "#f5c8bd"]
+      : ["#ee7c68", "#f2a38f", "#d69c25", "#0f817c", "#f5c8bd"];
   const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-  const particleCount = reducedMotion ? 8 : qixi ? 30 : 18;
+  const particleCount = reducedMotion ? 8 : qixi ? (fangfang ? 24 : 30) : (fangfang ? 16 : 18);
   const angleOffset = Math.random() * Math.PI;
   for (let index = 0; index < particleCount; index += 1) {
     const angle = angleOffset + (Math.PI * 2 * index) / particleCount;
-    const distance = (reducedMotion ? 34 : qixi ? 70 : 58) + Math.random() * (reducedMotion ? 24 : qixi ? 78 : 62);
+    const baseDistance = fangfang ? 48 : 58;
+    const distance = (reducedMotion ? 34 : qixi ? baseDistance + 12 : baseDistance) + Math.random() * (reducedMotion ? 24 : qixi ? 72 : 58);
     const particle = document.createElement("span");
     particle.className = "heart-firework-particle";
     particle.style.setProperty("--firework-x", `${Math.cos(angle) * distance}px`);
@@ -1235,14 +1242,16 @@ function showHeartFirework(x, y) {
     particle.style.setProperty("--firework-color", colors[index % colors.length]);
     particle.style.setProperty("--firework-delay", `${Math.random() * .08}s`);
     particle.style.setProperty("--firework-rotation", `${-130 + Math.random() * 260}deg`);
-    const icon = qixi && index % 6 === 0 ? "sparkles" : index % 4 === 0 ? "star" : "heart";
+    const icon = fangfang
+      ? index % 5 === 0 ? "sparkles" : index % 3 === 0 ? "star" : "heart"
+      : qixi && index % 6 === 0 ? "sparkles" : index % 4 === 0 ? "star" : "heart";
     particle.innerHTML = `<i data-lucide="${icon}" aria-hidden="true"></i>`;
     burst.appendChild(particle);
   }
   if (qixi && !reducedMotion) {
     const sign = document.createElement("span");
     sign.className = "heart-firework-sign";
-    sign.textContent = "L × F";
+    sign.textContent = fangfang ? "F ♥ L" : "L × F";
     burst.appendChild(sign);
   }
   layer.appendChild(burst);
@@ -1622,8 +1631,8 @@ $("#todayLabel").addEventListener("keydown", (event) => {
 $(".brand").addEventListener("click", () => recordQixiTap("brand"));
 
 document.addEventListener("click", (event) => {
-  if (!isAdmin || !isReviewer()) return;
-  showHeartFirework(event.clientX, event.clientY);
+  if (!isAdmin || !["recorder", "reviewer"].includes(currentRole)) return;
+  showHeartFirework(event.clientX, event.clientY, currentRole);
 });
 
 $("#authForm").addEventListener("submit", async (event) => {
