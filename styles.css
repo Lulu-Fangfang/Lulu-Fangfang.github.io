@@ -398,6 +398,14 @@ input:not(:disabled):focus, select:not(:disabled):focus, textarea:not(:disabled)
 @keyframes loveParticleFall { 0% { opacity: 0; transform: translate3d(0,-8vh,0) rotate(0); } 12% { opacity: .95; } 88% { opacity: .85; } 100% { opacity: 0; transform: translate3d(var(--particle-drift),116vh,0) rotate(var(--particle-rotation)); } }
 @keyframes loveMessageIn { 0% { opacity: 0; transform: translate(-50%,-14px) scale(.96); } 12%, 76% { opacity: 1; transform: translate(-50%,0) scale(1); } 100% { opacity: 0; transform: translate(-50%,8px) scale(.98); } }
 
+.heart-fireworks { position: fixed; z-index: 75; inset: 0; overflow: hidden; pointer-events: none; }
+.heart-firework-burst { position: absolute; left: var(--burst-x); top: var(--burst-y); width: 0; height: 0; }
+.heart-firework-ring { position: absolute; left: 0; top: 0; width: 18px; height: 18px; border: 2px solid rgba(238,124,104,.72); border-radius: 50%; opacity: 0; animation: heartFireworkRing .75s ease-out forwards; }
+.heart-firework-particle { position: absolute; left: 0; top: 0; display: grid; place-items: center; width: var(--firework-size); height: var(--firework-size); color: var(--firework-color); opacity: 0; filter: drop-shadow(0 4px 7px rgba(66,32,45,.18)); animation: heartFireworkBurst 1.25s cubic-bezier(.12,.7,.28,1) var(--firework-delay) forwards; }
+.heart-firework-particle svg { width: 100%; height: 100%; fill: currentColor; stroke-width: 1.35; }
+@keyframes heartFireworkRing { 0% { opacity: .9; transform: translate(-50%,-50%) scale(.2); } 100% { opacity: 0; transform: translate(-50%,-50%) scale(5.4); } }
+@keyframes heartFireworkBurst { 0% { opacity: 0; transform: translate(-50%,-50%) scale(.15) rotate(0); } 14% { opacity: 1; } 78% { opacity: .96; } 100% { opacity: 0; transform: translate(-50%,-50%) translate(var(--firework-x),var(--firework-y)) scale(.55) rotate(var(--firework-rotation)); } }
+
 @media (max-width: 920px) {
   .module-hub { grid-template-columns: 1fr; }
   .module-hub-item { min-height: 105px; }
@@ -512,4 +520,5 @@ input:not(:disabled):focus, select:not(:disabled):focus, textarea:not(:disabled)
 @media (prefers-reduced-motion: reduce) {
   .love-particle { display: none; }
   .love-celebration-message { animation-duration: 2.6s; }
+  .heart-firework-particle { animation-duration: .65s; }
 }

@@ -1075,6 +1075,42 @@ function showLoveCelebration() {
   }, 5200);
 }
 
+function showHeartFirework(x, y) {
+  const layer = $("#heartFireworks");
+  if (!layer) return;
+  while (layer.childElementCount >= 8) layer.firstElementChild?.remove();
+  const burst = document.createElement("span");
+  burst.className = "heart-firework-burst";
+  burst.style.setProperty("--burst-x", `${x}px`);
+  burst.style.setProperty("--burst-y", `${y}px`);
+  burst.innerHTML = '<span class="heart-firework-ring"></span>';
+  const colors = ["#ee7c68", "#f2a38f", "#d69c25", "#0f817c", "#f5c8bd"];
+  const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const particleCount = reducedMotion ? 8 : 18;
+  const angleOffset = Math.random() * Math.PI;
+  for (let index = 0; index < particleCount; index += 1) {
+    const angle = angleOffset + (Math.PI * 2 * index) / particleCount;
+    const distance = (reducedMotion ? 34 : 58) + Math.random() * (reducedMotion ? 24 : 62);
+    const particle = document.createElement("span");
+    particle.className = "heart-firework-particle";
+    particle.style.setProperty("--firework-x", `${Math.cos(angle) * distance}px`);
+    particle.style.setProperty("--firework-y", `${Math.sin(angle) * distance}px`);
+    particle.style.setProperty("--firework-size", `${11 + Math.random() * 11}px`);
+    particle.style.setProperty("--firework-color", colors[index % colors.length]);
+    particle.style.setProperty("--firework-delay", `${Math.random() * .08}s`);
+    particle.style.setProperty("--firework-rotation", `${-130 + Math.random() * 260}deg`);
+    particle.innerHTML = `<i data-lucide="${index % 4 === 0 ? "star" : "heart"}" aria-hidden="true"></i>`;
+    burst.appendChild(particle);
+  }
+  layer.appendChild(burst);
+  layer.hidden = false;
+  refreshIcons();
+  setTimeout(() => {
+    burst.remove();
+    if (!layer.childElementCount) layer.hidden = true;
+  }, 1500);
+}
+
 function fallbackHash(value) {
   let a = 2166136261 >>> 0;
   let b = 374761393 >>> 0;
@@ -1431,6 +1467,11 @@ document.addEventListener("click", async (event) => {
 });
 
 $("#adminButton").addEventListener("click", () => isAdmin ? setView("settings") : openModal("authModal"));
+
+document.addEventListener("click", (event) => {
+  if (!isAdmin || !isReviewer()) return;
+  showHeartFirework(event.clientX, event.clientY);
+});
 
 $("#authForm").addEventListener("submit", async (event) => {
   event.preventDefault();
