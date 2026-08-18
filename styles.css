@@ -37,10 +37,10 @@ a { color: inherit; text-decoration: none; }
 .brand { display: inline-flex; align-items: center; gap: 12px; }
 .brand-mark { width: 45px; height: 45px; border-radius: 14px; display: grid; place-items: center; background: var(--navy); color: white; font: 700 15px "DM Mono", monospace; letter-spacing: 0; box-shadow: 0 8px 15px rgba(23, 49, 73, .16); }
 .brand-mark-text { color: white; white-space: nowrap; }
-.brand-mark-text i { color: var(--coral); font-style: normal; margin: 0 1px; }
+.brand-mark-text i { color: var(--coral); font-size: .72em; font-style: normal; margin: 0 2px; vertical-align: .08em; }
 .brand-copy { display: grid; gap: 2px; }
 .brand-copy strong { font-size: 17px; letter-spacing: .01em; }
-.brand-copy i { color: var(--coral); font-style: normal; }
+.brand-copy i { color: var(--coral); font-size: .72em; font-style: normal; margin: 0 2px; vertical-align: .08em; }
 .eyebrow { margin: 0; color: var(--mint-deep); font: 500 10px/1.2 "DM Mono", monospace; letter-spacing: .12em; text-transform: uppercase; }
 .brand-copy .eyebrow { color: var(--ink-soft); font-size: 9px; }
 .top-actions { display: flex; align-items: center; gap: 12px; }

@@ -1251,7 +1251,7 @@ function showHeartFirework(x, y, role = currentRole) {
   if (qixi && !reducedMotion) {
     const sign = document.createElement("span");
     sign.className = "heart-firework-sign";
-    sign.textContent = fangfang ? "F ♥ L" : "L × F";
+    sign.textContent = fangfang ? "F ♥ L" : "L ♥ F";
     burst.appendChild(sign);
   }
   layer.appendChild(burst);
