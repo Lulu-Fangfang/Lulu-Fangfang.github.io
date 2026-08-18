@@ -57,6 +57,7 @@ let cloudSyncState = "checking";
 let cloudSyncDetail = "正在连接 Supabase";
 let pendingLocalMigration = null;
 let applyingRemoteState = false;
+let loveCelebrationTimer = null;
 
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => [...document.querySelectorAll(selector)];
@@ -1043,6 +1044,37 @@ function toast(message) {
   setTimeout(() => item.remove(), 3200);
 }
 
+function showLoveCelebration() {
+  const celebration = $("#loveCelebration");
+  const field = $("#loveParticleField");
+  if (!celebration || !field) return;
+  if (loveCelebrationTimer) clearTimeout(loveCelebrationTimer);
+  field.replaceChildren();
+  const colors = ["#ee7c68", "#f2a38f", "#d69c25", "#0f817c", "#f5c8bd"];
+  const particleCount = window.matchMedia("(prefers-reduced-motion: reduce)").matches ? 0 : 44;
+  for (let index = 0; index < particleCount; index += 1) {
+    const particle = document.createElement("span");
+    const isHeart = index % 3 !== 0;
+    particle.className = "love-particle";
+    particle.style.setProperty("--particle-x", `${Math.random() * 96}%`);
+    particle.style.setProperty("--particle-size", `${12 + Math.random() * 15}px`);
+    particle.style.setProperty("--particle-color", colors[index % colors.length]);
+    particle.style.setProperty("--particle-delay", `${Math.random() * 1.5}s`);
+    particle.style.setProperty("--particle-duration", `${2.8 + Math.random() * 1.8}s`);
+    particle.style.setProperty("--particle-drift", `${-55 + Math.random() * 110}px`);
+    particle.style.setProperty("--particle-rotation", `${-160 + Math.random() * 320}deg`);
+    particle.innerHTML = `<i data-lucide="${isHeart ? "heart" : "star"}" aria-hidden="true"></i>`;
+    field.appendChild(particle);
+  }
+  celebration.hidden = false;
+  refreshIcons();
+  loveCelebrationTimer = setTimeout(() => {
+    celebration.hidden = true;
+    field.replaceChildren();
+    loveCelebrationTimer = null;
+  }, 5200);
+}
+
 function fallbackHash(value) {
   let a = 2166136261 >>> 0;
   let b = 374761393 >>> 0;
@@ -1087,7 +1119,10 @@ function unlock(role, { restored = false } = {}) {
   $("#passwordInput").value = "";
   $("#authError").hidden = true;
   render();
-  if (!restored) setView(role === "recorder" ? "daily" : "overview");
+  if (!restored) {
+    setView(role === "recorder" ? "daily" : "overview");
+    if (role === "reviewer") showLoveCelebration();
+  }
   const mode = cloudContext ? "，云端同步已连接" : "，当前为本机模式";
   const action = restored ? "身份已自动恢复" : "身份已登录";
   toast(`${role === "recorder" ? "方方共同记录" : "路路小皇帝管理"}${action}${mode}`);
